@@ -35,14 +35,12 @@ pub(crate) struct AppArgs {
 
     #[clap(long, env = "BUCKET")]
     pub bucket: String,
-
-    #[clap(long, env = "ENDPOINT")]
-    pub endpoint: String,
 }
 
 #[derive(Debug)]
 pub(crate) struct S3ReproxySetup {
     pub config: Config,
+    pub args: AppArgs,
 }
 
 #[derive(Debug, Error)]
@@ -67,7 +65,7 @@ impl S3ReproxySetup {
         let config: Config = serde_yaml::from_slice(&config_slice)
             .map_err(|e| Error::Serde(args.config_file.clone(), e))?;
 
-        let setup = Self { config };
+        let setup = Self { config, args };
 
         Self::validate_config(&setup)?;
 
