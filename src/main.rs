@@ -130,6 +130,7 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
                 break;
             }
             res = listener.accept() => {
+
                 match res {
                     Ok((stream, _)) => {
                         let peer = stream.peer_addr().ok().map(|a| format!("{:?}", a));

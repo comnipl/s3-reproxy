@@ -72,6 +72,7 @@ impl S3ReproxySetup {
         Ok(setup)
     }
 
+    /// TODO: 名前の重複に対してエラーを出
     #[instrument(name = "setup/validation")]
     fn validate_config(setup: &Self) -> Result<(), SpanErr<Error>> {
         if setup

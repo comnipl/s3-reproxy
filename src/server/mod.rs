@@ -3,6 +3,8 @@ pub mod remote;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Input, ListObjectsV2Output};
+use itertools::Itertools;
 use s3s::dto::{
     Bucket, GetBucketLocationInput, GetBucketLocationOutput, HeadBucketInput, HeadBucketOutput,
     ListBucketsInput, ListBucketsOutput,
@@ -63,5 +65,15 @@ impl S3 for S3Reproxy {
         let output = HeadBucketOutput::default();
         info!("(intercepted) ok");
         Ok(S3Response::new(output))
+    }
+
+    #[instrument(skip_all)]
+    async fn list_objects_v2(
+        &self,
+        req: S3Request<ListObjectsV2Input>,
+    ) -> S3Result<S3Response<ListObjectsV2Output>> {
+        //  TODO: 複数のリモートに対してリクエストを投げる
+        let read_from = self.remotes.iter();
+        todo!()
     }
 }
