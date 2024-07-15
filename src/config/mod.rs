@@ -9,7 +9,7 @@ use crate::error::SpanErr;
 
 use self::s3_target::Config;
 
-mod s3_target;
+pub mod s3_target;
 
 #[derive(Parser, Derivative)]
 #[derivative(Debug)]

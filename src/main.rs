@@ -1,29 +1,28 @@
-use std::future::IntoFuture;
-use std::net::{IpAddr, Ipv4Addr};
-use std::pin::pin;
+use std::net::Ipv4Addr;
+use std::sync::Arc;
 
-use crate::logger::Logger;
+use crate::server::remote::spawn_remote;
 use crate::server::S3Reproxy;
 use clap::Parser;
-use futures::FutureExt;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use s3s::auth::SimpleAuth;
 use s3s::service::S3ServiceBuilder;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tower::ServiceBuilder;
-use tracing_subscriber::fmt::format::FmtSpan;
-mod config;
-mod error;
-mod logger;
-mod server;
+pub mod config;
+pub mod error;
+pub mod server;
 
 use self::config::S3ReproxySetup;
 use self::error::SpanErr;
+use self::server::remote::RemoteMessage;
 use clap::error::Result;
 use dotenvy::dotenv;
 use thiserror::Error;
-use tracing::{info, instrument};
+use tracing::{info, instrument, Instrument};
 use tracing_error::ErrorLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -36,7 +35,7 @@ async fn main() {
         .with(
             tracing_subscriber::fmt::layer()
                 .with_target(false)
-                .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
+                .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
         )
         .with(ErrorLayer::default())
         .try_init()
@@ -63,6 +62,9 @@ enum S3ProxyError {
 
     #[error("Failed to setup signal handler: \n{0}")]
     Signal(std::io::Error),
+
+    #[error("Failed to communicate with remote task: \n{0}")]
+    Remote(#[from] mpsc::error::SendError<RemoteMessage>),
 }
 
 #[instrument]
@@ -73,9 +75,28 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
         .await
         .map_err(|e| e.map(S3ProxyError::Setup))?;
 
+    let mut remote_tasks = JoinSet::new();
+    let remotes = Arc::new(
+        setup
+            .config
+            .targets
+            .into_iter()
+            .map(|t| spawn_remote(t, &mut remote_tasks))
+            .collect(),
+    );
+
     let server = S3Reproxy {
         bucket: setup.args.bucket,
+        remotes: Arc::clone(&remotes),
     };
+
+    for r in remotes.iter() {
+        r.tx.send(server::remote::RemoteMessage::HealthCheck {
+            reply: tokio::sync::oneshot::channel().0,
+        })
+        .await
+        .map_err(S3ProxyError::Remote)?;
+    }
 
     let s3_service = {
         let mut builder = S3ServiceBuilder::new(server);
@@ -90,9 +111,7 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
         .await
         .map_err(S3ProxyError::Bind)?;
 
-    let hyper_s3_service = ServiceBuilder::new()
-        .layer_fn(Logger::new)
-        .service(s3_service.into_shared());
+    let hyper_s3_service = ServiceBuilder::new().service(s3_service.into_shared());
 
     let http_server = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
     let graceful = hyper_util::server::graceful::GracefulShutdown::new();
@@ -113,12 +132,15 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
             res = listener.accept() => {
                 match res {
                     Ok((stream, _)) => {
+                        let peer = stream.peer_addr().ok().map(|a| format!("{:?}", a));
                         let serve = graceful.watch(
                             http_server.serve_connection(TokioIo::new(stream), hyper_s3_service.clone()).into_owned()
                         );
                         tokio::spawn(async move {
                             let _ = serve.await;
-                        });
+                        }.instrument(
+                            tracing::info_span!("connection", remote = peer)
+                        ));
 
                     }
                     Err(e) => {
@@ -130,7 +152,14 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
         }
     }
 
+    for r in remotes.iter() {
+        r.tx.send(server::remote::RemoteMessage::Shutdown)
+            .await
+            .map_err(S3ProxyError::Remote)?;
+    }
+
     graceful.shutdown().await;
+    while (remote_tasks.join_next().await).is_some() {}
 
     info!("Server shutdown complete");
 

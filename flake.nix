@@ -22,6 +22,7 @@
           default = pkgs.mkShell {
             nativeBuildInputs = [
               pkgs.libiconv
+              pkgs.darwin.apple_sdk.frameworks.Security
               rust
             ];
             shellHook = ''
@@ -32,6 +33,7 @@
           beta = pkgs.mkShell {
             nativeBuildInputs = [
               pkgs.libiconv
+              pkgs.darwin.apple_sdk.frameworks.Security
               rust-beta
             ];
             shellHook = ''
@@ -42,6 +44,7 @@
           nightly = pkgs.mkShell {
             nativeBuildInputs = [
               pkgs.libiconv
+              pkgs.darwin.apple_sdk.frameworks.Security
               rust-nightly
             ];
             shellHook = ''
