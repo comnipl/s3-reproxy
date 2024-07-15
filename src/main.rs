@@ -1,6 +1,8 @@
+use clap::Parser;
 mod config;
 mod error;
 
+use self::config::S3ReproxySetup;
 use self::error::SpanErr;
 use clap::error::Result;
 use dotenvy::dotenv;
@@ -27,15 +29,29 @@ async fn main() {
     tracing::info!("s3-reproxy v{}", env!("CARGO_PKG_VERSION"));
 
     if let Err(e) = s3_reproxy().await {
-        tracing::error!("{}", e.error);
-        eprintln!("{}", color_spantrace::colorize(&e.span));
+        tracing::error!(
+            "s3-reproxy stopped due to following error:\n\n\x1b[31m\x1b[1m{}\x1b[m\n\n{}",
+            e.error,
+            color_spantrace::colorize(&e.span)
+        );
     }
 }
 
 #[derive(Error, Debug)]
-enum S3ProxyError {}
+enum S3ProxyError {
+    #[error("Failed to setup s3-reproxy: \n{0}")]
+    SetupError(#[from] config::Error),
+}
 
 #[instrument]
 async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
+    let args = config::AppArgs::parse();
+
+    let setup = S3ReproxySetup::new(args)
+        .await
+        .map_err(|e| e.map(S3ProxyError::SetupError))?;
+
+    tracing::info!("{:?}", setup.config);
+
     Ok(())
 }

@@ -1,121 +1,74 @@
-use serde::{Deserialize, Serialize};
+use clap::Parser;
+use std::path::PathBuf;
+use thiserror::Error;
+use tokio::fs;
+use tracing::instrument;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Config {
-    targets: Vec<S3Target>,
+use crate::error::SpanErr;
+
+use self::s3_target::Config;
+
+mod s3_target;
+
+#[derive(Parser, Debug)]
+#[clap(
+    name = "s3-reproxy",
+    version = env!("CARGO_PKG_VERSION"),
+    author = "AsPulse (pus' uite)",
+    about = "A transparent proxy for S3 replication"
+)]
+pub(crate) struct AppArgs {
+    #[clap(long)]
+    pub config_file: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct S3Credential {
-    endpoint: String,
-    access_key: String,
-    secret_key: String,
+#[derive(Debug)]
+pub(crate) struct S3ReproxySetup {
+    pub config: Config,
 }
 
-const fn default_priority() -> u32 {
-    1
+#[derive(Debug, Error)]
+pub(crate) enum Error {
+    #[error("Failed to read config file {0}: {1}")]
+    Io(PathBuf, #[source] std::io::Error),
+
+    #[error("Failed to parse config file {0}:\n {1}")]
+    Serde(PathBuf, #[source] serde_yaml::Error),
+
+    #[error("At least one readable target must be specified")]
+    MissingReadableTarget,
 }
 
-const fn default_read_request() -> bool {
-    true
-}
+impl S3ReproxySetup {
+    #[instrument(name = "setup")]
+    pub async fn new(args: AppArgs) -> Result<Self, SpanErr<Error>> {
+        let config_slice = fs::read(&args.config_file)
+            .await
+            .map_err(|e| Error::Io(args.config_file.clone(), e))?;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct S3Target {
-    /// The name of the target
-    name: String,
+        let config: Config = serde_yaml::from_slice(&config_slice)
+            .map_err(|e| Error::Serde(args.config_file.clone(), e))?;
 
-    /// Read priority of this target.
-    /// Read Requests to s3-reproxy are issued in order of priority.
-    #[serde(default = "default_priority")]
-    priority: u32,
+        let setup = Self { config };
 
-    /// Whether this target is allowed to read?
-    /// For requests to search for or retrieve a file, if all targets with read_request true respond "does not exist", s3-reproxy will not search for the file any further and will respond "does not exist".
-    /// However, if all targets with read_request true are down, the one with read_request false and highest priority will be used for reading.
-    #[serde(default = "default_read_request")]
-    read_request: bool,
+        Self::validate_config(&setup)?;
 
-    s3: S3Credential,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn parse_target_with_default() {
-        let yaml = r#"
-            name: cloudflare-r2
-            s3:
-              endpoint: http://localhost:8080
-              access_key: abcabc
-              secret_key: defdef
-        "#;
-
-        let target: S3Target = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            target,
-            S3Target {
-                name: "cloudflare-r2".to_string(),
-                priority: 1,
-                read_request: true,
-                s3: S3Credential {
-                    endpoint: "http://localhost:8080".to_string(),
-                    access_key: "abcabc".to_string(),
-                    secret_key: "defdef".to_string(),
-                },
-            }
-        );
+        Ok(setup)
     }
 
-    #[test]
-    fn parse_config() {
-        let yaml = r#"
-            targets:
-            - name: cloudflare-r2
-              priority: 3
-              read_request: false
-              s3:
-                endpoint: http://localhost:8080
-                access_key: abcabc
-                secret_key: defdef
-            - name: local-minio
-              priority: 5
-              read_request: true
-              s3:
-                endpoint: http://localhost:8080
-                access_key: abcabc
-                secret_key: defdef
-        "#;
+    #[instrument(name = "setup/validation")]
+    fn validate_config(setup: &Self) -> Result<(), SpanErr<Error>> {
+        if setup
+            .config
+            .targets
+            .iter()
+            .filter(|t| t.read_request)
+            .count()
+            < 1
+        {
+            Err(Error::MissingReadableTarget)?;
+        }
 
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
-
-        assert_eq!(
-            config.targets,
-            vec![
-                S3Target {
-                    name: "cloudflare-r2".to_string(),
-                    priority: 3,
-                    read_request: false,
-                    s3: S3Credential {
-                        endpoint: "http://localhost:8080".to_string(),
-                        access_key: "abcabc".to_string(),
-                        secret_key: "defdef".to_string(),
-                    },
-                },
-                S3Target {
-                    name: "local-minio".to_string(),
-                    priority: 5,
-                    read_request: true,
-                    s3: S3Credential {
-                        endpoint: "http://localhost:8080".to_string(),
-                        access_key: "abcabc".to_string(),
-                        secret_key: "defdef".to_string(),
-                    },
-                },
-            ]
-        );
+        Ok(())
     }
 }
