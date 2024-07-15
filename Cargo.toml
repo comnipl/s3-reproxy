@@ -6,7 +6,9 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.5.9", features = ["derive", "env"] }
 color-spantrace = "0.2.1"
+derivative = "2.2.0"
 dotenvy = "0.15.7"
+s3s = "0.10.0"
 serde = { version = "1.0.204", features = ["derive"] }
 serde_yaml = "0.9.34"
 thiserror = "1.0.62"

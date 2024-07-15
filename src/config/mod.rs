@@ -1,4 +1,5 @@
 use clap::Parser;
+use derivative::Derivative;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::fs;
@@ -10,7 +11,8 @@ use self::s3_target::Config;
 
 mod s3_target;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Derivative)]
+#[derivative(Debug)]
 #[clap(
     name = "s3-reproxy",
     version = env!("CARGO_PKG_VERSION"),
@@ -20,6 +22,22 @@ mod s3_target;
 pub(crate) struct AppArgs {
     #[clap(long)]
     pub config_file: PathBuf,
+
+    #[clap(long, default_value = "9000", env = "PORT")]
+    pub port: u16,
+
+    #[clap(long, env = "ACCESS_KEY")]
+    pub access_key: String,
+
+    #[clap(long, env = "SECRET_KEY", hide_env_values = true)]
+    #[derivative(Debug = "ignore")]
+    pub secret_key: String,
+
+    #[clap(long, env = "BUCKET")]
+    pub bucket: String,
+
+    #[clap(long, env = "ENDPOINT")]
+    pub endpoint: String,
 }
 
 #[derive(Debug)]

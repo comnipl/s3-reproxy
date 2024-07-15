@@ -1,3 +1,4 @@
+use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -5,11 +6,14 @@ pub struct Config {
     pub targets: Vec<S3Target>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Derivative)]
+#[derivative(Debug)]
 pub struct S3Credential {
     pub endpoint: String,
     pub access_key: String,
+    #[derivative(Debug = "ignore")]
     pub secret_key: String,
+    pub bucket: String,
 }
 
 const fn default_priority() -> u32 {
@@ -52,6 +56,7 @@ mod tests {
               endpoint: http://localhost:8080
               access_key: abcabc
               secret_key: defdef
+              bucket: test
         "#;
 
         let target: S3Target = serde_yaml::from_str(yaml).unwrap();
@@ -65,6 +70,7 @@ mod tests {
                     endpoint: "http://localhost:8080".to_string(),
                     access_key: "abcabc".to_string(),
                     secret_key: "defdef".to_string(),
+                    bucket: "test".to_string(),
                 },
             }
         );
@@ -81,6 +87,7 @@ mod tests {
                 endpoint: http://localhost:8080
                 access_key: abcabc
                 secret_key: defdef
+                bucket: test1
             - name: local-minio
               priority: 5
               read_request: true
@@ -88,6 +95,7 @@ mod tests {
                 endpoint: http://localhost:8080
                 access_key: abcabc
                 secret_key: defdef
+                bucket: test2
         "#;
 
         let config: Config = serde_yaml::from_str(yaml).unwrap();
@@ -103,6 +111,7 @@ mod tests {
                         endpoint: "http://localhost:8080".to_string(),
                         access_key: "abcabc".to_string(),
                         secret_key: "defdef".to_string(),
+                        bucket: "test1".to_string(),
                     },
                 },
                 S3Target {
@@ -113,6 +122,7 @@ mod tests {
                         endpoint: "http://localhost:8080".to_string(),
                         access_key: "abcabc".to_string(),
                         secret_key: "defdef".to_string(),
+                        bucket: "test2".to_string(),
                     },
                 },
             ]
