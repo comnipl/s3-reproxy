@@ -177,7 +177,7 @@ impl S3 for S3Reproxy {
                         S3Error::new(s3s::S3ErrorCode::InternalError)
                     })?;
 
-                Some(list.inserted_id.to_string())
+                Some(list.inserted_id.as_object_id().unwrap().to_hex())
             }
             None => None,
         };

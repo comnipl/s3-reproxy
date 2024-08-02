@@ -22,6 +22,7 @@
               pkgs.libiconv
               pkgs.darwin.apple_sdk.frameworks.Security
               pkgs.minio-client
+              pkgs.python312Packages.boto3
               rust
             ];
             shellHook = ''
