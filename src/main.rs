@@ -1,3 +1,4 @@
+#![feature(try_blocks)]
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tower::ServiceBuilder;
 pub mod config;
+pub mod db;
 pub mod error;
 pub mod server;
 
@@ -65,6 +67,9 @@ enum S3ProxyError {
 
     #[error("Failed to communicate with remote task: \n{0}")]
     Remote(#[from] mpsc::error::SendError<RemoteMessage>),
+
+    #[error("Failed to connect to MongoDB: \n{0}")]
+    DB(#[from] mongodb::error::Error),
 }
 
 #[instrument]
@@ -85,9 +90,16 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
             .collect(),
     );
 
+    let db = Arc::new(
+        db::MongoDB::connect(setup.args.mongo_uri, setup.args.mongo_db)
+            .await
+            .map_err(|e| e.map(S3ProxyError::DB))?,
+    );
+
     let server = S3Reproxy {
         bucket: setup.args.bucket,
         remotes: Arc::clone(&remotes),
+        db,
     };
 
     for r in remotes.iter() {

@@ -35,6 +35,12 @@ pub(crate) struct AppArgs {
 
     #[clap(long, env = "BUCKET")]
     pub bucket: String,
+
+    #[clap(long, env = "MONGO_URI", hide_env_values = true)]
+    pub mongo_uri: String,
+
+    #[clap(long, env = "MONGO_DB")]
+    pub mongo_db: String,
 }
 
 #[derive(Debug)]

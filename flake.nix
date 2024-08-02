@@ -15,14 +15,13 @@
           inherit system overlays;
         };
         rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-        rust-beta = pkgs.rust-bin.beta.latest.default;
-        rust-nightly = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
       in {
         devShells = {
           default = pkgs.mkShell {
             nativeBuildInputs = [
               pkgs.libiconv
               pkgs.darwin.apple_sdk.frameworks.Security
+              pkgs.minio-client
               rust
             ];
             shellHook = ''
@@ -30,27 +29,6 @@
             '';
           };
 
-          beta = pkgs.mkShell {
-            nativeBuildInputs = [
-              pkgs.libiconv
-              pkgs.darwin.apple_sdk.frameworks.Security
-              rust-beta
-            ];
-            shellHook = ''
-              exec $SHELL
-            '';
-          };
-
-          nightly = pkgs.mkShell {
-            nativeBuildInputs = [
-              pkgs.libiconv
-              pkgs.darwin.apple_sdk.frameworks.Security
-              rust-nightly
-            ];
-            shellHook = ''
-              exec $SHELL
-            '';
-          };
         };
       }
     );

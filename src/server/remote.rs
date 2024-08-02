@@ -1,4 +1,5 @@
 use aws_sdk_s3::config::{Credentials, Region};
+use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output;
 use aws_sdk_s3::Client;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
@@ -15,7 +16,16 @@ pub struct S3Remote {
 }
 
 pub enum RemoteMessage {
-    HealthCheck { reply: oneshot::Sender<bool> },
+    HealthCheck {
+        reply: oneshot::Sender<bool>,
+    },
+    ListObjects {
+        prefix: Option<String>,
+        delimiter: Option<String>,
+        max_keys: Option<i32>,
+        start_after: Option<String>,
+        reply: oneshot::Sender<Option<ListObjectsV2Output>>,
+    },
     Shutdown,
 }
 
@@ -60,6 +70,25 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                     false
                                 },
                             });
+                        }
+                        RemoteMessage::ListObjects { prefix, delimiter, max_keys, start_after, reply } => {
+                            info!("Listing objects...");
+                            let q = client.list_objects_v2()
+                                .bucket(target.s3.bucket.clone())
+                                .set_prefix(prefix)
+                                .set_start_after(start_after)
+                                .set_delimiter(delimiter)
+                                .set_max_keys(max_keys)
+                                .send()
+                                .await;
+                            map_health(&mut health, &q);
+
+                            let a = q.map_err(|e| {
+                                warn!("List objects failed: {:?}", e);
+                                s3s::dto::ListObjectsV2Output::default()
+                            }).ok();
+
+                            reply.send(a).unwrap();
                         }
                         RemoteMessage::Shutdown => {
                             break;
