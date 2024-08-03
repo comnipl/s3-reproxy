@@ -7,18 +7,19 @@ use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::operation::RequestId;
 use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
 use aws_smithy_runtime_api::client::result::ServiceError;
-use itertools::Itertools;
+use futures::StreamExt;
+use itertools::{Either, Itertools};
 use mongodb::bson::doc;
 use mongodb::bson::oid::ObjectId;
 use s3s::dto::{
-    Bucket, GetBucketLocationInput, GetBucketLocationOutput, GetObjectInput, GetObjectOutput,
-    HeadBucketInput, HeadBucketOutput, HeadObjectInput, HeadObjectOutput, ListBucketsInput,
-    ListBucketsOutput, ListObjectsV2Input, ListObjectsV2Output,
+    Bucket, DeleteObjectInput, DeleteObjectOutput, GetBucketLocationInput, GetBucketLocationOutput,
+    GetObjectInput, GetObjectOutput, HeadBucketInput, HeadBucketOutput, HeadObjectInput,
+    HeadObjectOutput, ListBucketsInput, ListBucketsOutput, ListObjectsV2Input, ListObjectsV2Output,
 };
 use s3s::{s3_error, S3Error, S3ErrorCode, S3Request, S3Response, S3Result, S3};
-use s3s_aws::conv::AwsConversion;
+use s3s_aws::conv::{self, AwsConversion};
 use tokio::sync::oneshot;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, instrument, warn, Instrument};
 
 use crate::db::MongoDB;
 
@@ -95,6 +96,69 @@ impl S3 for S3Reproxy {
         let output = HeadBucketOutput::default();
         info!("(intercepted) ok");
         Ok(S3Response::new(output))
+    }
+
+    #[instrument(skip_all, name = "s3s/delete_object")]
+    async fn delete_object(
+        &self,
+        req: S3Request<DeleteObjectInput>,
+    ) -> S3Result<S3Response<DeleteObjectOutput>> {
+        let input = DeleteObjectInput::try_into_aws(req.input)?;
+        let results = futures::stream::iter(self.remotes.iter())
+            .map(|remote| async {
+                let Some(result) = (try {
+                    let (tx, rx) = oneshot::channel();
+                    remote
+                        .tx
+                        .send(remote::RemoteMessage::DeleteObject {
+                            input: input.clone(),
+                            reply: tx,
+                        })
+                        .await
+                        .ok()?;
+                    rx.await.ok()??
+                }) else {
+                    warn!("remote({:?}) request failed. skipping", remote.name);
+                    return None;
+                };
+                Some((remote.name.clone(), result))
+            })
+            .boxed()
+            .buffer_unordered(4)
+            .filter_map(|e| async { e })
+            .collect::<Vec<_>>()
+            .await;
+
+        let (successes, failures): (Vec<_>, Vec<_>) =
+            results
+                .into_iter()
+                .partition_map(|(remote, result)| match result {
+                    Ok(output) => Either::Left((remote, output)),
+                    Err(e) => Either::Right((remote, e)),
+                });
+
+        let output = if failures.is_empty() {
+            let (remote, reply) = successes.into_iter().next().unwrap();
+            info!("all remote ok (replied remote: {})", remote);
+            reply
+        } else if successes.is_empty() {
+            let (remote, err) = failures.into_iter().next().unwrap();
+            info!("all remote failed (replied remote: {})", remote);
+            Err(convert_sdk_err(err))?
+        } else {
+            error!("some remote failed (inconsisted).");
+            for (remote, _) in successes.iter() {
+                info!("remote({:?}) ok", remote);
+            }
+            for (remote, err) in failures {
+                error!("remote({:?}) failed: {:?}", remote, err);
+            }
+            let (remote, reply) = successes.into_iter().next().unwrap();
+            info!("some remote ok (replied remote: {})", remote);
+            reply
+        };
+
+        Ok(S3Response::new(DeleteObjectOutput::try_from_aws(output)?))
     }
 
     #[instrument(skip_all, name = "s3s/get_object")]

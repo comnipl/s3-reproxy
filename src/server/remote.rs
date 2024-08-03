@@ -1,5 +1,8 @@
 use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::operation::delete_object::{
+    DeleteObjectError, DeleteObjectInput, DeleteObjectOutput,
+};
 use aws_sdk_s3::operation::get_object::{GetObjectError, GetObjectInput, GetObjectOutput};
 use aws_sdk_s3::operation::head_object::{HeadObjectError, HeadObjectInput, HeadObjectOutput};
 use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output};
@@ -51,6 +54,17 @@ pub enum RemoteMessage {
         reply: oneshot::Sender<
             Option<
                 Result<GetObjectOutput, ServiceError<GetObjectError, orchestrator::HttpResponse>>,
+            >,
+        >,
+    },
+    DeleteObject {
+        input: DeleteObjectInput,
+        reply: oneshot::Sender<
+            Option<
+                Result<
+                    DeleteObjectOutput,
+                    ServiceError<DeleteObjectError, orchestrator::HttpResponse>,
+                >,
             >,
         >,
     },
@@ -109,7 +123,7 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                 .set_max_keys(max_keys)
                                 .send()
                                 .await;
-                            reply.send(map_health(&mut health, q)).unwrap();
+                            let _ = reply.send(map_health(&mut health, q));
                         }
                         RemoteMessage::GetObject { input, reply } => {
                             info!("Get object...");
@@ -139,7 +153,22 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                 .send()
                                 .await;
 
-                            reply.send(map_health(&mut health, q)).unwrap();
+                            let _ = reply.send(map_health(&mut health, q));
+                        }
+                        RemoteMessage::DeleteObject { input, reply } => {
+                            info!("Delete object...");
+                            let q = client.delete_object()
+                                .bucket(target.s3.bucket.clone())
+                                .set_key(input.key)
+                                .set_mfa(input.mfa)
+                                .set_version_id(input.version_id)
+                                .set_request_payer(input.request_payer)
+                                .set_bypass_governance_retention(input.bypass_governance_retention)
+                                .set_expected_bucket_owner(input.expected_bucket_owner)
+                                .send()
+                                .await;
+
+                            let _ = reply.send(map_health(&mut health, q));
                         }
                         RemoteMessage::HeadObject { input, reply } => {
                             info!("Head object...");
@@ -167,7 +196,7 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                 .send()
                                 .await;
 
-                            reply.send(map_health(&mut health, q)).unwrap();
+                            let _ = reply.send(map_health(&mut health, q));
                         }
                         RemoteMessage::Shutdown => {
                             break;
