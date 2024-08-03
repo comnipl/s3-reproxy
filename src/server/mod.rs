@@ -116,7 +116,7 @@ impl S3 for S3Reproxy {
         let read_remotes = self.remotes.iter().sorted_by(|a, b| {
             b.read_request
                 .cmp(&a.read_request)
-                .then_with(|| a.priority.cmp(&b.priority))
+                .then_with(|| b.priority.cmp(&a.priority))
         });
 
         let start_after = start_after.or(req.input.start_after.clone());

@@ -1,4 +1,8 @@
-use mongodb::options::ClientOptions;
+use std::time::Duration;
+
+use mongodb::bson::doc;
+use mongodb::options::{ClientOptions, IndexOptions};
+use mongodb::IndexModel;
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 
@@ -36,6 +40,39 @@ impl MongoDB {
         };
 
         info!("Creating indexes...");
+
+        mongo
+            .list_object_tokens
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "created_at": 1 })
+                    .options(
+                        IndexOptions::builder()
+                            .expire_after(Duration::from_days(1))
+                            .build(),
+                    )
+                    .build(),
+            )
+            .await?;
+
+        info!("list_object_tokens created_at index created.");
+
+        mongo
+            .list_object_tokens
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "consumed_at": 1 })
+                    .options(
+                        IndexOptions::builder()
+                            .expire_after(Duration::from_mins(10))
+                            .build(),
+                    )
+                    .build(),
+            )
+            .await?;
+
+        info!("list_object_tokens consumed_at index created.");
+
         info!("Indexes created.");
 
         Ok(mongo)

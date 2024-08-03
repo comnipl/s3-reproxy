@@ -1,4 +1,5 @@
 #![feature(try_blocks)]
+#![feature(duration_constructors)]
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tower::ServiceBuilder;
+use tracing_subscriber::filter::filter_fn;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -24,7 +26,7 @@ use self::server::remote::RemoteMessage;
 use clap::error::Result;
 use dotenvy::dotenv;
 use thiserror::Error;
-use tracing::{info, instrument, Instrument};
+use tracing::{info, instrument, Instrument, Level};
 use tracing_error::ErrorLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -36,8 +38,13 @@ async fn main() {
     tracing_subscriber::Registry::default()
         .with(
             tracing_subscriber::fmt::layer()
-                .with_target(false)
-                .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
+                .with_target(true)
+                .with_filter(filter_fn(|d| {
+                    *d.level() <= Level::INFO
+                        || (*d.level() == Level::DEBUG
+                            && d.line() == Some(72)
+                            && d.module_path() == Some("s3s::service"))
+                })),
         )
         .with(ErrorLayer::default())
         .try_init()
