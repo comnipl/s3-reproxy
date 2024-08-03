@@ -1,8 +1,15 @@
+
 use aws_sdk_s3::config::{Credentials, Region};
-use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output;
+use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::operation::head_object::{
+    HeadObjectError, HeadObjectInput, HeadObjectOutput,
+};
+use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output};
 use aws_sdk_s3::Client;
+use aws_smithy_runtime_api::client::orchestrator;
+use aws_smithy_runtime_api::client::result::ServiceError;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinSet;
 use tracing::{info, instrument, warn, Instrument};
 
 use crate::config::s3_target::S3Target;
@@ -24,7 +31,22 @@ pub enum RemoteMessage {
         delimiter: Option<String>,
         max_keys: Option<i32>,
         start_after: Option<String>,
-        reply: oneshot::Sender<Option<ListObjectsV2Output>>,
+        reply: oneshot::Sender<
+            Option<
+                Result<
+                    ListObjectsV2Output,
+                    ServiceError<ListObjectsV2Error, orchestrator::HttpResponse>,
+                >,
+            >,
+        >,
+    },
+    HeadObject {
+        input: HeadObjectInput,
+        reply: oneshot::Sender<
+            Option<
+                Result<HeadObjectOutput, ServiceError<HeadObjectError, orchestrator::HttpResponse>>,
+            >,
+        >,
     },
     Shutdown,
 }
@@ -62,10 +84,10 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                         RemoteMessage::HealthCheck { reply } => {
                             info!("Checking health...");
                             let q = client.head_bucket().bucket(target.s3.bucket.clone()).send().await;
-                            map_health(&mut health, &q);
+                            let q = map_health(&mut health, q);
                             let _ = reply.send(match q {
-                                Ok(_) => true,
-                                Err(e) => {
+                                Some(Ok(_)) => true,
+                                e => {
                                     warn!("Health check failed: {:?}", e);
                                     false
                                 },
@@ -81,14 +103,35 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                 .set_max_keys(max_keys)
                                 .send()
                                 .await;
-                            map_health(&mut health, &q);
+                            reply.send(map_health(&mut health, q)).unwrap();
+                        }
+                        RemoteMessage::HeadObject { input, reply } => {
+                            info!("Head object...");
+                            let q = client.head_object()
+                                .bucket(target.s3.bucket.clone())
+                                .set_if_match(input.if_match)
+                                .set_if_modified_since(input.if_modified_since)
+                                .set_if_unmodified_since(input.if_unmodified_since)
+                                .set_key(input.key)
+                                .set_range(input.range)
+                                .set_response_cache_control(input.response_cache_control)
+                                .set_response_content_disposition(input.response_content_disposition)
+                                .set_response_content_encoding(input.response_content_encoding)
+                                .set_response_content_language(input.response_content_language)
+                                .set_response_content_type(input.response_content_type)
+                                .set_response_expires(input.response_expires)
+                                .set_version_id(input.version_id)
+                                .set_sse_customer_algorithm(input.sse_customer_algorithm)
+                                .set_sse_customer_key(input.sse_customer_key)
+                                .set_sse_customer_key_md5(input.sse_customer_key_md5)
+                                .set_request_payer(input.request_payer)
+                                .set_part_number(input.part_number)
+                                .set_expected_bucket_owner(input.expected_bucket_owner)
+                                .set_checksum_mode(input.checksum_mode)
+                                .send()
+                                .await;
 
-                            let a = q.map_err(|e| {
-                                warn!("List objects failed: {:?}", e);
-                                s3s::dto::ListObjectsV2Output::default()
-                            }).ok();
-
-                            reply.send(a).unwrap();
+                            reply.send(map_health(&mut health, q)).unwrap();
                         }
                         RemoteMessage::Shutdown => {
                             break;
@@ -110,8 +153,19 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
 }
 
 #[instrument(name = "remote/health", skip_all)]
-fn map_health<T, E>(self_health: &mut Option<bool>, query: &Result<T, E>) {
-    let health = query.is_ok();
+fn map_health<T, E1, E2>(
+    self_health: &mut Option<bool>,
+    query: Result<T, SdkError<E1, E2>>,
+) -> Option<Result<T, ServiceError<E1, E2>>> {
+    // ServiceErrorはリモートが返してきたエラーなので, DOWNとは判断しない
+    let (query, health) = match query {
+        Ok(t) => (Some(Ok(t)), true),
+        Err(SdkError::ServiceError(e)) => (Some(Err(e)), true),
+        Err(e) => {
+            warn!("remote unhealthy response: {}", e);
+            (None, false)
+        }
+    };
     if *self_health != Some(health) {
         if health {
             info!("remote is UP")
@@ -120,4 +174,5 @@ fn map_health<T, E>(self_health: &mut Option<bool>, query: &Result<T, E>) {
         }
         *self_health = Some(health);
     }
+    query
 }

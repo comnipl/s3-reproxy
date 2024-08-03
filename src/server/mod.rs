@@ -1,29 +1,53 @@
 pub mod remote;
 use crate::db::ListObjectTokens;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use aws_sdk_s3::error::ProvideErrorMetadata;
+use aws_sdk_s3::operation::RequestId;
+use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
+use aws_smithy_runtime_api::client::result::ServiceError;
 use itertools::Itertools;
 use mongodb::bson::doc;
 use mongodb::bson::oid::ObjectId;
 use s3s::dto::{
     Bucket, GetBucketLocationInput, GetBucketLocationOutput, HeadBucketInput, HeadBucketOutput,
-    ListBucketsInput, ListBucketsOutput, ListObjectsV2Input, ListObjectsV2Output,
+    HeadObjectInput, HeadObjectOutput, ListBucketsInput, ListBucketsOutput, ListObjectsV2Input,
+    ListObjectsV2Output,
 };
-use s3s::{s3_error, S3Error, S3Request, S3Response, S3Result, S3};
+use s3s::{s3_error, S3Error, S3ErrorCode, S3Request, S3Response, S3Result, S3};
 use s3s_aws::conv::AwsConversion;
 use tokio::sync::oneshot;
 use tracing::{error, info, instrument, warn};
 
 use crate::db::MongoDB;
 
-use self::remote::{RemoteMessage, S3Remote};
+use self::remote::S3Remote;
 
 pub struct S3Reproxy {
     pub bucket: String,
     pub remotes: Arc<Vec<S3Remote>>,
     pub db: Arc<MongoDB>,
+}
+
+#[inline(always)]
+fn convert_sdk_err<E: ProvideErrorMetadata>(sdk: ServiceError<E, HttpResponse>) -> S3Error {
+    let mut s3s = S3Error::new(S3ErrorCode::InternalError);
+    let meta = sdk.err().meta();
+    if let Some(s) = meta
+        .code()
+        .and_then(|s| S3ErrorCode::from_bytes(s.as_bytes()))
+    {
+        s3s.set_code(s);
+    }
+    if let Some(m) = meta.message() {
+        s3s.set_message(m.to_owned());
+    }
+    if let Some(i) = meta.request_id() {
+        s3s.set_request_id(i);
+    }
+    s3s.set_status_code(hyper::StatusCode::from_u16(sdk.raw().status().as_u16()).unwrap());
+    s3s
 }
 
 #[async_trait]
@@ -70,6 +94,53 @@ impl S3 for S3Reproxy {
 
         let output = HeadBucketOutput::default();
         info!("(intercepted) ok");
+        Ok(S3Response::new(output))
+    }
+
+    #[instrument(skip_all, name = "s3s/head_object")]
+    async fn head_object(
+        &self,
+        req: S3Request<HeadObjectInput>,
+    ) -> S3Result<S3Response<HeadObjectOutput>> {
+        let read_remotes = self.remotes.iter().sorted_by(|a, b| {
+            b.read_request
+                .cmp(&a.read_request)
+                .then_with(|| b.priority.cmp(&a.priority))
+        });
+
+        let input = HeadObjectInput::try_into_aws(req.input)?;
+
+        let Some((result, remote)) = ('request: {
+            for remote in read_remotes {
+                let Some(output) = (try {
+                    let (tx, rx) = oneshot::channel();
+                    remote
+                        .tx
+                        .send(remote::RemoteMessage::HeadObject {
+                            input: input.clone(),
+                            reply: tx,
+                        })
+                        .await
+                        .ok()?;
+                    rx.await.ok()??
+                }) else {
+                    warn!("remote({:?}) request failed. skipping", remote.name);
+                    continue;
+                };
+                break 'request Some((output, remote.name.clone()));
+            }
+            None
+        }) else {
+            warn!("no remotes available!");
+            return Err(s3_error!(InternalError));
+        };
+
+        info!("ok (remote: {})", remote);
+
+        let output = result
+            .map_err(convert_sdk_err)
+            .and_then(HeadObjectOutput::try_from_aws)?;
+
         Ok(S3Response::new(output))
     }
 
@@ -149,7 +220,11 @@ impl S3 for S3Reproxy {
             return Err(s3_error!(InternalError));
         };
 
-        let mut output = ListObjectsV2Output::try_from_aws(result)?;
+        info!("ok (remote: {})", remote);
+
+        let mut output = result
+            .map_err(convert_sdk_err)
+            .and_then(ListObjectsV2Output::try_from_aws)?;
 
         output.continuation_token = req.input.continuation_token;
         output.next_continuation_token = match output.next_continuation_token {
@@ -182,7 +257,6 @@ impl S3 for S3Reproxy {
             None => None,
         };
 
-        info!("ok (remote: {})", remote);
         Ok(S3Response::new(output))
     }
 }
