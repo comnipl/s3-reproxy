@@ -3,6 +3,9 @@ use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::delete_object::{
     DeleteObjectError, DeleteObjectInput, DeleteObjectOutput,
 };
+use aws_sdk_s3::operation::delete_objects::{
+    DeleteObjectsError, DeleteObjectsInput, DeleteObjectsOutput,
+};
 use aws_sdk_s3::operation::get_object::{GetObjectError, GetObjectInput, GetObjectOutput};
 use aws_sdk_s3::operation::head_object::{HeadObjectError, HeadObjectInput, HeadObjectOutput};
 use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output};
@@ -64,6 +67,17 @@ pub enum RemoteMessage {
                 Result<
                     DeleteObjectOutput,
                     ServiceError<DeleteObjectError, orchestrator::HttpResponse>,
+                >,
+            >,
+        >,
+    },
+    DeleteObjects {
+        input: DeleteObjectsInput,
+        reply: oneshot::Sender<
+            Option<
+                Result<
+                    DeleteObjectsOutput,
+                    ServiceError<DeleteObjectsError, orchestrator::HttpResponse>,
                 >,
             >,
         >,
@@ -165,6 +179,21 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                 .set_request_payer(input.request_payer)
                                 .set_bypass_governance_retention(input.bypass_governance_retention)
                                 .set_expected_bucket_owner(input.expected_bucket_owner)
+                                .send()
+                                .await;
+
+                            let _ = reply.send(map_health(&mut health, q));
+                        }
+                        RemoteMessage::DeleteObjects { input, reply } => {
+                            info!("Delete objects...");
+                            let q = client.delete_objects()
+                                .bucket(target.s3.bucket.clone())
+                                .set_delete(input.delete)
+                                .set_mfa(input.mfa)
+                                .set_request_payer(input.request_payer)
+                                .set_bypass_governance_retention(input.bypass_governance_retention)
+                                .set_expected_bucket_owner(input.expected_bucket_owner)
+                                .set_checksum_algorithm(input.checksum_algorithm)
                                 .send()
                                 .await;
 
