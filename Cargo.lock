@@ -1974,6 +1974,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "aws-sdk-s3",
+ "aws-smithy-runtime-api",
  "clap",
  "color-spantrace",
  "derivative",

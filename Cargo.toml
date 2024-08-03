@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 async-trait = "0.1.81"
 aws-sdk-s3 = "1.41.0"
+aws-smithy-runtime-api = "1.7.1"
 clap = { version = "4.5.9", features = ["derive", "env"] }
 color-spantrace = "0.2.1"
 derivative = "2.2.0"

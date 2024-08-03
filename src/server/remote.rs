@@ -1,9 +1,7 @@
-
 use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::error::SdkError;
-use aws_sdk_s3::operation::head_object::{
-    HeadObjectError, HeadObjectInput, HeadObjectOutput,
-};
+use aws_sdk_s3::operation::get_object::{GetObjectError, GetObjectInput, GetObjectOutput};
+use aws_sdk_s3::operation::head_object::{HeadObjectError, HeadObjectInput, HeadObjectOutput};
 use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output};
 use aws_sdk_s3::Client;
 use aws_smithy_runtime_api::client::orchestrator;
@@ -45,6 +43,14 @@ pub enum RemoteMessage {
         reply: oneshot::Sender<
             Option<
                 Result<HeadObjectOutput, ServiceError<HeadObjectError, orchestrator::HttpResponse>>,
+            >,
+        >,
+    },
+    GetObject {
+        input: GetObjectInput,
+        reply: oneshot::Sender<
+            Option<
+                Result<GetObjectOutput, ServiceError<GetObjectError, orchestrator::HttpResponse>>,
             >,
         >,
     },
@@ -103,6 +109,36 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                 .set_max_keys(max_keys)
                                 .send()
                                 .await;
+                            reply.send(map_health(&mut health, q)).unwrap();
+                        }
+                        RemoteMessage::GetObject { input, reply } => {
+                            info!("Get object...");
+
+                            let q = client.get_object()
+                                .bucket(target.s3.bucket.clone())
+                                .set_checksum_mode(input.checksum_mode)
+                                .set_expected_bucket_owner(input.expected_bucket_owner)
+                                .set_if_match(input.if_match)
+                                .set_if_modified_since(input.if_modified_since)
+                                .set_if_none_match(input.if_none_match)
+                                .set_if_unmodified_since(input.if_unmodified_since)
+                                .set_key(input.key)
+                                .set_part_number(input.part_number)
+                                .set_range(input.range)
+                                .set_request_payer(input.request_payer)
+                                .set_response_cache_control(input.response_cache_control)
+                                .set_response_content_disposition(input.response_content_disposition)
+                                .set_response_content_encoding(input.response_content_encoding)
+                                .set_response_content_language(input.response_content_language)
+                                .set_response_content_type(input.response_content_type)
+                                .set_response_expires(input.response_expires)
+                                .set_sse_customer_algorithm(input.sse_customer_algorithm)
+                                .set_sse_customer_key(input.sse_customer_key)
+                                .set_sse_customer_key_md5(input.sse_customer_key_md5)
+                                .set_version_id(input.version_id)
+                                .send()
+                                .await;
+
                             reply.send(map_health(&mut health, q)).unwrap();
                         }
                         RemoteMessage::HeadObject { input, reply } => {

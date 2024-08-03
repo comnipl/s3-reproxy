@@ -11,9 +11,9 @@ use itertools::Itertools;
 use mongodb::bson::doc;
 use mongodb::bson::oid::ObjectId;
 use s3s::dto::{
-    Bucket, GetBucketLocationInput, GetBucketLocationOutput, HeadBucketInput, HeadBucketOutput,
-    HeadObjectInput, HeadObjectOutput, ListBucketsInput, ListBucketsOutput, ListObjectsV2Input,
-    ListObjectsV2Output,
+    Bucket, GetBucketLocationInput, GetBucketLocationOutput, GetObjectInput, GetObjectOutput,
+    HeadBucketInput, HeadBucketOutput, HeadObjectInput, HeadObjectOutput, ListBucketsInput,
+    ListBucketsOutput, ListObjectsV2Input, ListObjectsV2Output,
 };
 use s3s::{s3_error, S3Error, S3ErrorCode, S3Request, S3Response, S3Result, S3};
 use s3s_aws::conv::AwsConversion;
@@ -94,6 +94,53 @@ impl S3 for S3Reproxy {
 
         let output = HeadBucketOutput::default();
         info!("(intercepted) ok");
+        Ok(S3Response::new(output))
+    }
+
+    #[instrument(skip_all, name = "s3s/get_object")]
+    async fn get_object(
+        &self,
+        req: S3Request<GetObjectInput>,
+    ) -> S3Result<S3Response<GetObjectOutput>> {
+        let read_remotes = self.remotes.iter().sorted_by(|a, b| {
+            b.read_request
+                .cmp(&a.read_request)
+                .then_with(|| b.priority.cmp(&a.priority))
+        });
+
+        let input = GetObjectInput::try_into_aws(req.input)?;
+
+        let Some((result, remote)) = ('request: {
+            for remote in read_remotes {
+                let Some(output) = (try {
+                    let (tx, rx) = oneshot::channel();
+                    remote
+                        .tx
+                        .send(remote::RemoteMessage::GetObject {
+                            input: input.clone(),
+                            reply: tx,
+                        })
+                        .await
+                        .ok()?;
+                    rx.await.ok()??
+                }) else {
+                    warn!("remote({:?}) request failed. skipping", remote.name);
+                    continue;
+                };
+                break 'request Some((output, remote.name.clone()));
+            }
+            None
+        }) else {
+            warn!("no remotes available!");
+            return Err(s3_error!(InternalError));
+        };
+
+        info!("ok (remote: {})", remote);
+
+        let output = result
+            .map_err(convert_sdk_err)
+            .and_then(GetObjectOutput::try_from_aws)?;
+
         Ok(S3Response::new(output))
     }
 
