@@ -1,4 +1,6 @@
+pub mod clone;
 pub mod remote;
+pub mod stream;
 use crate::db::ListObjectTokens;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -16,7 +18,7 @@ use s3s::dto::{
     Bucket, DeleteObjectInput, DeleteObjectOutput, DeleteObjectsInput, DeleteObjectsOutput,
     GetBucketLocationInput, GetBucketLocationOutput, GetObjectInput, GetObjectOutput,
     HeadBucketInput, HeadBucketOutput, HeadObjectInput, HeadObjectOutput, ListBucketsInput,
-    ListBucketsOutput, ListObjectsV2Input, ListObjectsV2Output,
+    ListBucketsOutput, ListObjectsV2Input, ListObjectsV2Output, PutObjectInput, PutObjectOutput,
 };
 use s3s::{s3_error, S3Error, S3ErrorCode, S3Request, S3Response, S3Result, S3};
 use s3s_aws::conv::{self, AwsConversion};
@@ -25,6 +27,7 @@ use tracing::{error, info, instrument, warn, Instrument};
 
 use crate::db::MongoDB;
 
+use self::clone::clone_put_object_input;
 use self::remote::S3Remote;
 
 pub struct S3Reproxy {
@@ -98,6 +101,45 @@ impl S3 for S3Reproxy {
         let output = HeadBucketOutput::default();
         info!("(intercepted) ok");
         Ok(S3Response::new(output))
+    }
+
+    #[instrument(skip_all, name = "s3s/put_object")]
+    async fn put_object(
+        &self,
+        req: S3Request<PutObjectInput>,
+    ) -> S3Result<S3Response<PutObjectOutput>> {
+        let input = PutObjectInput::try_into_aws(req.input)?;
+        let results = futures::stream::iter(self.remotes.iter())
+            .map(|remote| {
+                let (input, input2) = clone_put_object_input(input);
+                async {
+                    let Some(result) = (try {
+                        let (tx, rx) = oneshot::channel();
+                        remote
+                            .tx
+                            .send(remote::RemoteMessage::PutObject {
+                                input: input2,
+                                reply: tx,
+                            })
+                            .await
+                            .ok()?;
+                        rx.await.ok()??
+                    }) else {
+                        warn!("remote({:?}) request failed. skipping", remote.name);
+                        return None;
+                    };
+                    Some((remote.name.clone(), result))
+                }
+            })
+            .boxed()
+            .buffer_unordered(4)
+            .filter_map(|e| async { e })
+            .collect::<Vec<_>>()
+            .await;
+
+        let output = output_remote_inconsistent(results)?;
+
+        Ok(S3Response::new(PutObjectOutput::try_from_aws(output)?))
     }
 
     #[instrument(skip_all, name = "s3s/delete_objects")]
