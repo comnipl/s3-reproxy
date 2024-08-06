@@ -27,7 +27,7 @@ use tracing::{error, info, instrument, warn, Instrument};
 
 use crate::db::MongoDB;
 
-use self::clone::clone_put_object_input;
+use self::clone::PutObjectInputMultiplier;
 use self::remote::S3Remote;
 
 pub struct S3Reproxy {
@@ -109,27 +109,31 @@ impl S3 for S3Reproxy {
         req: S3Request<PutObjectInput>,
     ) -> S3Result<S3Response<PutObjectOutput>> {
         let input = PutObjectInput::try_into_aws(req.input)?;
-        let results = futures::stream::iter(self.remotes.iter())
+        let input_multiplier = PutObjectInputMultiplier::from_input(input);
+        let remotes = futures::stream::iter(self.remotes.iter())
             .map(|remote| {
-                let (input, input2) = clone_put_object_input(input);
-                async {
-                    let Some(result) = (try {
-                        let (tx, rx) = oneshot::channel();
-                        remote
-                            .tx
-                            .send(remote::RemoteMessage::PutObject {
-                                input: input2,
-                                reply: tx,
-                            })
-                            .await
-                            .ok()?;
-                        rx.await.ok()??
-                    }) else {
-                        warn!("remote({:?}) request failed. skipping", remote.name);
-                        return None;
-                    };
-                    Some((remote.name.clone(), result))
-                }
+                let input = input_multiplier.input();
+                async move { (remote, input.await.unwrap()) }
+            })
+            .boxed()
+            .buffer_unordered(8)
+            .collect::<Vec<_>>()
+            .await;
+        let results = futures::stream::iter(remotes.into_iter())
+            .map(|(remote, input)| async move {
+                let Some(result) = (try {
+                    let (tx, rx) = oneshot::channel();
+                    remote
+                        .tx
+                        .send(remote::RemoteMessage::PutObject { input, reply: tx })
+                        .await
+                        .ok()?;
+                    rx.await.ok()??
+                }) else {
+                    warn!("remote({:?}) request failed. skipping", remote.name);
+                    return None;
+                };
+                Some((remote.name.clone(), result))
             })
             .boxed()
             .buffer_unordered(4)
@@ -437,7 +441,13 @@ fn output_remote_inconsistent<T, E: Debug + ProvideErrorMetadata>(
             });
 
     if failures.is_empty() {
-        let (remote, reply) = successes.into_iter().next().unwrap();
+        let (remote, reply) = successes.into_iter().next().map_or_else(
+            || {
+                warn!("no remotes available!");
+                Err(S3Error::new(S3ErrorCode::InternalError))
+            },
+            Result::Ok,
+        )?;
         info!("all remote ok (replied remote: {})", remote);
         Ok(reply)
     } else if successes.is_empty() {

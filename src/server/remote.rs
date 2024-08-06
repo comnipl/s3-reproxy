@@ -13,6 +13,7 @@ use aws_sdk_s3::operation::put_object::{PutObjectError, PutObjectInput, PutObjec
 use aws_sdk_s3::Client;
 use aws_smithy_runtime_api::client::orchestrator;
 use aws_smithy_runtime_api::client::result::ServiceError;
+use std::fmt::Debug;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tracing::{info, instrument, warn, Instrument};
@@ -184,7 +185,6 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                 .bucket(target.s3.bucket.clone())
                                 .set_acl(input.acl)
                                 .body(input.body)
-                                .set_bucket(input.bucket)
                                 .set_cache_control(input.cache_control)
                                 .set_content_disposition(input.content_disposition)
                                 .set_content_encoding(input.content_encoding)
@@ -302,7 +302,7 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
 }
 
 #[instrument(name = "remote/health", skip_all)]
-fn map_health<T, E1, E2>(
+fn map_health<T, E1: Debug, E2: Debug>(
     self_health: &mut Option<bool>,
     query: Result<T, SdkError<E1, E2>>,
 ) -> Option<Result<T, ServiceError<E1, E2>>> {
@@ -311,7 +311,7 @@ fn map_health<T, E1, E2>(
         Ok(t) => (Some(Ok(t)), true),
         Err(SdkError::ServiceError(e)) => (Some(Err(e)), true),
         Err(e) => {
-            warn!("remote unhealthy response: {}", e);
+            warn!("remote unhealthy response: {} {:?}", e, e);
             (None, false)
         }
     };
