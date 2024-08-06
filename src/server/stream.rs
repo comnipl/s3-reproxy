@@ -148,23 +148,22 @@ impl Body for ByteStreamReceiver {
     #[instrument(skip_all, name = "byte_stream_receiver/poll")]
     fn poll_frame(
         self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
         let project = self.project();
-        match project.frame_rx.try_recv() {
-            Ok(Some(frame)) => {
-                std::task::Poll::Ready(Some(frame.map(|f| http_body::Frame::data(f))))
-            }
-            Ok(None) => {
+        let waker = cx.waker().clone();
+        project.frame_rx.poll_recv(cx).map(|r| match r {
+            Some(Some(frame)) => Some(frame.map(|f| http_body::Frame::data(f))),
+            Some(None) => {
+                info!("end stream reached");
                 *project.is_end_stream_reached = true;
-                std::task::Poll::Ready(None)
+                None
             }
-            Err(mpsc::error::TryRecvError::Empty) => std::task::Poll::Pending,
-            Err(mpsc::error::TryRecvError::Disconnected) => {
+            None => {
                 error!("frame_rx disconnected");
-                std::task::Poll::Ready(Some(Err(ByteStreamError::Disconnected)))
+                Some(Err(ByteStreamError::Disconnected))
             }
-        }
+        })
     }
 
     fn is_end_stream(&self) -> bool {

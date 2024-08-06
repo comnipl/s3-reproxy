@@ -4,6 +4,7 @@ pub mod stream;
 use crate::db::ListObjectTokens;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use aws_sdk_s3::error::ProvideErrorMetadata;
@@ -23,6 +24,7 @@ use s3s::dto::{
 use s3s::{s3_error, S3Error, S3ErrorCode, S3Request, S3Response, S3Result, S3};
 use s3s_aws::conv::{self, AwsConversion};
 use tokio::sync::oneshot;
+use tokio::time::sleep;
 use tracing::{error, info, instrument, warn, Instrument};
 
 use crate::db::MongoDB;
@@ -136,7 +138,7 @@ impl S3 for S3Reproxy {
                 Some((remote.name.clone(), result))
             })
             .boxed()
-            .buffer_unordered(4)
+            .buffer_unordered(8)
             .filter_map(|e| async { e })
             .collect::<Vec<_>>()
             .await;
