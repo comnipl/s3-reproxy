@@ -10,10 +10,10 @@ use tracing::{error, info, info_span, instrument, Instrument};
 
 //https://docs.rs/aws-sdk-s3/latest/aws_sdk_s3/primitives/struct.SdkBody.html#method.from_body_1_x
 
+type ByteStreamResult = Option<Result<Bytes, ByteStreamError>>;
+
 pub(crate) struct ByteStreamMultiplier {
-    subscribe_tx: Option<
-        mpsc::Sender<oneshot::Sender<mpsc::Receiver<Option<Result<Bytes, ByteStreamError>>>>>,
-    >,
+    subscribe_tx: Option<mpsc::Sender<oneshot::Sender<mpsc::Receiver<ByteStreamResult>>>>,
     size_hint_rx: watch::Receiver<http_body::SizeHint>,
 }
 
@@ -21,9 +21,8 @@ impl ByteStreamMultiplier {
     pub fn from_bytestream(mut stream: ByteStream) -> Self {
         let (listen_tx, mut listen_rx) = mpsc::channel(4);
 
-        let (subscribe_tx, mut subscribe_rx) = mpsc::channel::<
-            oneshot::Sender<mpsc::Receiver<Option<Result<Bytes, ByteStreamError>>>>,
-        >(4);
+        let (subscribe_tx, mut subscribe_rx) =
+            mpsc::channel::<oneshot::Sender<mpsc::Receiver<ByteStreamResult>>>(4);
         let (size_hint_tx, size_hint_rx) = watch::channel(http_body::SizeHint::default());
 
         tokio::spawn(
@@ -99,9 +98,7 @@ impl ByteStreamMultiplier {
     }
 
     pub async fn subscribe_stream(&self) -> Option<ByteStream> {
-        let Some(subscribe_tx) = self.subscribe_tx.clone() else {
-            return None;
-        };
+        let subscribe_tx = self.subscribe_tx.clone()?;
         let (tx, rx) = oneshot::channel();
         subscribe_tx.send(tx).await.unwrap();
         let receiver: ByteStreamReceiver = ByteStreamReceiver {
@@ -136,7 +133,7 @@ enum ByteStreamError {
 
 #[pin_project]
 struct ByteStreamReceiver {
-    frame_rx: mpsc::Receiver<Option<Result<Bytes, ByteStreamError>>>,
+    frame_rx: mpsc::Receiver<ByteStreamResult>,
     size_hint_rx: watch::Receiver<http_body::SizeHint>,
     is_end_stream_reached: bool,
 }
@@ -146,14 +143,14 @@ impl Body for ByteStreamReceiver {
     type Error = ByteStreamError;
 
     #[instrument(skip_all, name = "byte_stream_receiver/poll")]
+    #[allow(clippy::type_complexity)]
     fn poll_frame(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
         let project = self.project();
-        let waker = cx.waker().clone();
         project.frame_rx.poll_recv(cx).map(|r| match r {
-            Some(Some(frame)) => Some(frame.map(|f| http_body::Frame::data(f))),
+            Some(Some(frame)) => Some(frame.map(http_body::Frame::data)),
             Some(None) => {
                 info!("end stream reached");
                 *project.is_end_stream_reached = true;

@@ -95,9 +95,7 @@ impl PutObjectInputMultiplier {
     }
 
     pub async fn input(&self) -> Option<PutObjectInput> {
-        let Some(body) = self.body.subscribe_stream().await else {
-            return None;
-        };
+        let body = self.body.subscribe_stream().await?;
 
         Some(
             PutObjectInputBuilder::default()
@@ -108,7 +106,7 @@ impl PutObjectInputMultiplier {
                 .set_content_disposition(self.content_disposition.clone())
                 .set_content_encoding(self.content_encoding.clone())
                 .set_content_language(self.content_language.clone())
-                .set_content_length(self.content_length.clone())
+                .set_content_length(self.content_length)
                 .set_content_md5(self.content_md5.clone())
                 .set_content_type(self.content_type.clone())
                 .set_checksum_algorithm(self.checksum_algorithm.clone())
@@ -116,7 +114,7 @@ impl PutObjectInputMultiplier {
                 .set_checksum_crc32_c(self.checksum_crc32_c.clone())
                 .set_checksum_sha1(self.checksum_sha1.clone())
                 .set_checksum_sha256(self.checksum_sha256.clone())
-                .set_expires(self.expires.clone())
+                .set_expires(self.expires)
                 .set_grant_full_control(self.grant_full_control.clone())
                 .set_grant_read(self.grant_read.clone())
                 .set_grant_read_acp(self.grant_read_acp.clone())
@@ -131,11 +129,11 @@ impl PutObjectInputMultiplier {
                 .set_sse_customer_key_md5(self.sse_customer_key_md5.clone())
                 .set_ssekms_key_id(self.ssekms_key_id.clone())
                 .set_ssekms_encryption_context(self.ssekms_encryption_context.clone())
-                .set_bucket_key_enabled(self.bucket_key_enabled.clone())
+                .set_bucket_key_enabled(self.bucket_key_enabled)
                 .set_request_payer(self.request_payer.clone())
                 .set_tagging(self.tagging.clone())
                 .set_object_lock_mode(self.object_lock_mode.clone())
-                .set_object_lock_retain_until_date(self.object_lock_retain_until_date.clone())
+                .set_object_lock_retain_until_date(self.object_lock_retain_until_date)
                 .set_object_lock_legal_hold_status(self.object_lock_legal_hold_status.clone())
                 .set_expected_bucket_owner(self.expected_bucket_owner.clone())
                 .build()

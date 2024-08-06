@@ -4,13 +4,12 @@ pub mod stream;
 use crate::db::ListObjectTokens;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::operation::RequestId;
 use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
-use aws_smithy_runtime_api::client::result::{SdkError, ServiceError};
+use aws_smithy_runtime_api::client::result::ServiceError;
 use futures::StreamExt;
 use itertools::{Either, Itertools};
 use mongodb::bson::doc;
@@ -22,10 +21,9 @@ use s3s::dto::{
     ListBucketsOutput, ListObjectsV2Input, ListObjectsV2Output, PutObjectInput, PutObjectOutput,
 };
 use s3s::{s3_error, S3Error, S3ErrorCode, S3Request, S3Response, S3Result, S3};
-use s3s_aws::conv::{self, AwsConversion};
+use s3s_aws::conv::AwsConversion;
 use tokio::sync::oneshot;
-use tokio::time::sleep;
-use tracing::{error, info, instrument, warn, Instrument};
+use tracing::{error, info, instrument, warn};
 
 use crate::db::MongoDB;
 
@@ -431,6 +429,7 @@ impl S3 for S3Reproxy {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn output_remote_inconsistent<T, E: Debug + ProvideErrorMetadata>(
     results: Vec<(String, Result<T, ServiceError<E, HttpResponse>>)>,
 ) -> Result<T, S3Error> {
