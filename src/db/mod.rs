@@ -15,11 +15,34 @@ pub struct ListObjectTokens {
     pub consumed_at: Option<mongodb::bson::DateTime>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultipartUploadIds {
+    pub upload_ids: Vec<RemoteMultipartUploadId>,
+    pub created_at: mongodb::bson::DateTime,
+    pub completed_at: Option<mongodb::bson::DateTime>,
+    pub aborted_at: Option<mongodb::bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteMultipartUploadId {
+    pub status: PartUploadStatus,
+    pub remote_name: String,
+    pub upload_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartUploadStatus {
+    Open,
+    Cancelled,
+}
+
 pub struct MongoDB {
     pub client: mongodb::Client,
     pub db: mongodb::Database,
 
     pub list_object_tokens: mongodb::Collection<ListObjectTokens>,
+    pub multipart_upload_ids: mongodb::Collection<MultipartUploadIds>,
 }
 
 impl MongoDB {
@@ -36,6 +59,7 @@ impl MongoDB {
         let mongo = Self {
             client,
             list_object_tokens: db.collection("list_object_tokens"),
+            multipart_upload_ids: db.collection("multipart_upload_ids"),
             db,
         };
 

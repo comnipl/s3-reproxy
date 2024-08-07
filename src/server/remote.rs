@@ -1,5 +1,11 @@
 use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::operation::complete_multipart_upload::{
+    CompleteMultipartUploadError, CompleteMultipartUploadInput, CompleteMultipartUploadOutput,
+};
+use aws_sdk_s3::operation::create_multipart_upload::{
+    CreateMultipartUploadError, CreateMultipartUploadInput, CreateMultipartUploadOutput,
+};
 use aws_sdk_s3::operation::delete_object::{
     DeleteObjectError, DeleteObjectInput, DeleteObjectOutput,
 };
@@ -88,6 +94,28 @@ pub enum RemoteMessage {
                 Result<
                     DeleteObjectsOutput,
                     ServiceError<DeleteObjectsError, orchestrator::HttpResponse>,
+                >,
+            >,
+        >,
+    },
+    CreateMultiPartUpload {
+        input: CreateMultipartUploadInput,
+        reply: oneshot::Sender<
+            Option<
+                Result<
+                    CreateMultipartUploadOutput,
+                    ServiceError<CreateMultipartUploadError, orchestrator::HttpResponse>,
+                >,
+            >,
+        >,
+    },
+    CompleteMultiPartUpload {
+        input: CompleteMultipartUploadInput,
+        reply: oneshot::Sender<
+            Option<
+                Result<
+                    CompleteMultipartUploadOutput,
+                    ServiceError<CompleteMultipartUploadError, orchestrator::HttpResponse>,
                 >,
             >,
         >,
@@ -277,6 +305,67 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                 .set_part_number(input.part_number)
                                 .set_expected_bucket_owner(input.expected_bucket_owner)
                                 .set_checksum_mode(input.checksum_mode)
+                                .send()
+                                .await;
+
+                            let _ = reply.send(map_health(&mut health, q));
+                        }
+                        RemoteMessage::CreateMultiPartUpload { input, reply } => {
+                            info!("Create multipart upload...");
+
+                            let q = client.create_multipart_upload()
+                                .bucket(target.s3.bucket.clone())
+                                .set_acl(input.acl)
+                                .set_cache_control(input.cache_control)
+                                .set_content_disposition(input.content_disposition)
+                                .set_content_encoding(input.content_encoding)
+                                .set_content_language(input.content_language)
+                                .set_content_type(input.content_type)
+                                .set_expires(input.expires)
+                                .set_grant_full_control(input.grant_full_control)
+                                .set_grant_read(input.grant_read)
+                                .set_grant_read_acp(input.grant_read_acp)
+                                .set_grant_write_acp(input.grant_write_acp)
+                                .set_key(input.key)
+                                .set_metadata(input.metadata)
+                                .set_server_side_encryption(input.server_side_encryption)
+                                .set_storage_class(input.storage_class)
+                                .set_website_redirect_location(input.website_redirect_location)
+                                .set_sse_customer_algorithm(input.sse_customer_algorithm)
+                                .set_sse_customer_key(input.sse_customer_key)
+                                .set_sse_customer_key_md5(input.sse_customer_key_md5)
+                                .set_ssekms_key_id(input.ssekms_key_id)
+                                .set_ssekms_encryption_context(input.ssekms_encryption_context)
+                                .set_bucket_key_enabled(input.bucket_key_enabled)
+                                .set_request_payer(input.request_payer)
+                                .set_tagging(input.tagging)
+                                .set_object_lock_mode(input.object_lock_mode)
+                                .set_object_lock_retain_until_date(input.object_lock_retain_until_date)
+                                .set_object_lock_legal_hold_status(input.object_lock_legal_hold_status)
+                                .set_expected_bucket_owner(input.expected_bucket_owner)
+                                .set_checksum_algorithm(input.checksum_algorithm)
+                                .send()
+                                .await;
+
+                            let _ = reply.send(map_health(&mut health, q));
+                        }
+                        RemoteMessage::CompleteMultiPartUpload { input, reply } => {
+                            info!("Complete multipart upload...");
+
+                            let q = client.complete_multipart_upload()
+                                .bucket(target.s3.bucket.clone())
+                                .set_key(input.key)
+                                .set_multipart_upload(input.multipart_upload)
+                                .set_upload_id(input.upload_id)
+                                .set_checksum_crc32(input.checksum_crc32)
+                                .set_checksum_crc32_c(input.checksum_crc32_c)
+                                .set_checksum_sha1(input.checksum_sha1)
+                                .set_checksum_sha256(input.checksum_sha256)
+                                .set_request_payer(input.request_payer)
+                                .set_expected_bucket_owner(input.expected_bucket_owner)
+                                .set_sse_customer_algorithm(input.sse_customer_algorithm)
+                                .set_sse_customer_key(input.sse_customer_key)
+                                .set_sse_customer_key_md5(input.sse_customer_key_md5)
                                 .send()
                                 .await;
 
