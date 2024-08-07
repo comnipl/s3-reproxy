@@ -132,7 +132,79 @@ impl S3 for S3Reproxy {
                 S3Error::new(S3ErrorCode::InvalidToken)
             })?;
 
-        todo!()
+        let remotes = ids
+            .upload_ids
+            .into_iter()
+            .map(|upload| match upload.status {
+                PartUploadStatus::Open => (
+                    self.remotes.iter().find(|r| r.name == upload.remote_name),
+                    upload,
+                ),
+                PartUploadStatus::Cancelled => (None, upload),
+            });
+
+        let input = CompleteMultipartUploadInput::try_into_aws(req.input)?;
+
+        let results = futures::stream::iter(remotes)
+            .map(|(remote, upload)| async {
+                if let Some(remote) = remote {
+                    let Some(result) = (try {
+                        let (tx, rx) = oneshot::channel();
+                        let mut input = input.clone();
+                        input.upload_id = Some(upload.upload_id);
+                        remote
+                            .tx
+                            .send(remote::RemoteMessage::CompleteMultiPartUpload {
+                                input,
+                                reply: tx,
+                            })
+                            .await
+                            .ok()?;
+                        rx.await.ok()??
+                    }) else {
+                        warn!("remote({:?}) request failed. cancelling", remote.name);
+                        return upload.cancelled();
+                    };
+                    upload
+                } else {
+                    info!(
+                        "remote({:?}) has already been cancelled by another s3-reproxy replica",
+                        upload.remote_name
+                    );
+                    upload
+                }
+            })
+            .boxed()
+            .buffer_unordered(8)
+            .collect::<Vec<_>>()
+            .await;
+
+        let (set, result) = if results.iter().all(|e| e.status == PartUploadStatus::Open) {
+            (
+                doc! {
+                    "$set": {
+                        "upload_ids": results,
+                        "completed_at": mongodb::bson::DateTime::now(),
+                    },
+                },
+                Ok(S3Response::new(CompleteMultipartUploadOutput {
+                    bucket: input.bucket,
+                    key: input.key,
+                    ..Default::default()
+                })),
+            )
+        } else {
+            (
+                doc! {
+                    "$set": {
+                        "upload_ids": results,
+                    },
+                },
+                Err(S3Error::new(S3ErrorCode::InternalError)),
+            )
+        };
+
+        result
     }
 
     #[instrument(skip_all, name = "s3s/create_multipart_upload")]

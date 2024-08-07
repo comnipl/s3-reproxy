@@ -23,14 +23,24 @@ pub struct MultipartUploadIds {
     pub aborted_at: Option<mongodb::bson::DateTime>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RemoteMultipartUploadId {
     pub status: PartUploadStatus,
     pub remote_name: String,
     pub upload_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl RemoteMultipartUploadId {
+    pub fn cancelled(&self) -> RemoteMultipartUploadId {
+        RemoteMultipartUploadId {
+            status: PartUploadStatus::Cancelled,
+            remote_name: self.remote_name.clone(),
+            upload_id: self.upload_id.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PartUploadStatus {
     Open,
