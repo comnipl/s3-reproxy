@@ -146,32 +146,35 @@ impl S3 for S3Reproxy {
         let input = CompleteMultipartUploadInput::try_into_aws(req.input)?;
 
         let results = futures::stream::iter(remotes)
-            .map(|(remote, upload)| async {
-                if let Some(remote) = remote {
-                    let Some(result) = (try {
-                        let (tx, rx) = oneshot::channel();
-                        let mut input = input.clone();
-                        input.upload_id = Some(upload.upload_id);
-                        remote
-                            .tx
-                            .send(remote::RemoteMessage::CompleteMultiPartUpload {
-                                input,
-                                reply: tx,
-                            })
-                            .await
-                            .ok()?;
-                        rx.await.ok()??
-                    }) else {
-                        warn!("remote({:?}) request failed. cancelling", remote.name);
-                        return upload.cancelled();
-                    };
-                    upload
-                } else {
-                    info!(
-                        "remote({:?}) has already been cancelled by another s3-reproxy replica",
-                        upload.remote_name
-                    );
-                    upload
+            .map(|(remote, upload)| {
+                let value = input.clone();
+                async move {
+                    if let Some(remote) = remote {
+                        let Some(_result) = (try {
+                            let (tx, rx) = oneshot::channel();
+                            let mut input = value.clone();
+                            input.upload_id = Some(upload.upload_id.clone());
+                            remote
+                                .tx
+                                .send(remote::RemoteMessage::CompleteMultiPartUpload {
+                                    input,
+                                    reply: tx,
+                                })
+                                .await
+                                .ok()?;
+                            rx.await.ok()??
+                        }) else {
+                            warn!("remote({:?}) request failed. cancelling", remote.name);
+                            return upload.cancelled();
+                        };
+                        upload
+                    } else {
+                        info!(
+                            "remote({:?}) has already been cancelled by another s3-reproxy replica",
+                            upload.remote_name
+                        );
+                        upload
+                    }
                 }
             })
             .boxed()
@@ -179,11 +182,16 @@ impl S3 for S3Reproxy {
             .collect::<Vec<_>>()
             .await;
 
+        let bson = mongodb::bson::to_bson(&results).map_err(|e| {
+            error!("mongodb serialization error: {:?}", e);
+            S3Error::new(S3ErrorCode::InternalError)
+        })?;
+
         let (set, result) = if results.iter().all(|e| e.status == PartUploadStatus::Open) {
             (
                 doc! {
                     "$set": {
-                        "upload_ids": results,
+                        "upload_ids": bson,
                         "completed_at": mongodb::bson::DateTime::now(),
                     },
                 },
@@ -197,12 +205,21 @@ impl S3 for S3Reproxy {
             (
                 doc! {
                     "$set": {
-                        "upload_ids": results,
+                        "upload_ids": bson,
                     },
                 },
                 Err(S3Error::new(S3ErrorCode::InternalError)),
             )
         };
+
+        self.db
+            .multipart_upload_ids
+            .update_one(doc! { "_id": id }, set)
+            .await
+            .map_err(|e| {
+                error!("mongodb error: {:?}", e);
+                S3Error::new(S3ErrorCode::InternalError)
+            })?;
 
         result
     }
