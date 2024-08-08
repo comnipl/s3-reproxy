@@ -16,6 +16,7 @@ use aws_sdk_s3::operation::get_object::{GetObjectError, GetObjectInput, GetObjec
 use aws_sdk_s3::operation::head_object::{HeadObjectError, HeadObjectInput, HeadObjectOutput};
 use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output};
 use aws_sdk_s3::operation::put_object::{PutObjectError, PutObjectInput, PutObjectOutput};
+use aws_sdk_s3::operation::upload_part::{UploadPartError, UploadPartInput, UploadPartOutput};
 use aws_sdk_s3::Client;
 use aws_smithy_runtime_api::client::orchestrator;
 use aws_smithy_runtime_api::client::result::ServiceError;
@@ -106,6 +107,14 @@ pub enum RemoteMessage {
                     CreateMultipartUploadOutput,
                     ServiceError<CreateMultipartUploadError, orchestrator::HttpResponse>,
                 >,
+            >,
+        >,
+    },
+    UploadPart {
+        input: UploadPartInput,
+        reply: oneshot::Sender<
+            Option<
+                Result<UploadPartOutput, ServiceError<UploadPartError, orchestrator::HttpResponse>>,
             >,
         >,
     },
@@ -344,6 +353,32 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                                 .set_object_lock_legal_hold_status(input.object_lock_legal_hold_status)
                                 .set_expected_bucket_owner(input.expected_bucket_owner)
                                 .set_checksum_algorithm(input.checksum_algorithm)
+                                .send()
+                                .await;
+
+                            let _ = reply.send(map_health(&mut health, q));
+                        }
+                        RemoteMessage::UploadPart { input, reply } => {
+                            info!("Upload part...");
+
+                            let q = client.upload_part()
+                                .bucket(target.s3.bucket.clone())
+                                .body(input.body)
+                                .set_content_length(input.content_length)
+                                .set_content_md5(input.content_md5)
+                                .set_checksum_algorithm(input.checksum_algorithm)
+                                .set_checksum_crc32(input.checksum_crc32)
+                                .set_checksum_crc32_c(input.checksum_crc32_c)
+                                .set_checksum_sha1(input.checksum_sha1)
+                                .set_checksum_sha256(input.checksum_sha256)
+                                .set_key(input.key)
+                                .set_part_number(input.part_number)
+                                .set_upload_id(input.upload_id)
+                                .set_sse_customer_algorithm(input.sse_customer_algorithm)
+                                .set_sse_customer_key(input.sse_customer_key)
+                                .set_sse_customer_key_md5(input.sse_customer_key_md5)
+                                .set_request_payer(input.request_payer)
+                                .set_expected_bucket_owner(input.expected_bucket_owner)
                                 .send()
                                 .await;
 

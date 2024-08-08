@@ -20,7 +20,7 @@ use s3s::dto::{
     DeleteObjectsInput, DeleteObjectsOutput, GetBucketLocationInput, GetBucketLocationOutput,
     GetObjectInput, GetObjectOutput, HeadBucketInput, HeadBucketOutput, HeadObjectInput,
     HeadObjectOutput, ListBucketsInput, ListBucketsOutput, ListObjectsV2Input, ListObjectsV2Output,
-    PutObjectInput, PutObjectOutput,
+    PutObjectInput, PutObjectOutput, UploadPartInput, UploadPartOutput,
 };
 use s3s::{s3_error, S3Error, S3ErrorCode, S3Request, S3Response, S3Result, S3};
 use s3s_aws::conv::AwsConversion;
@@ -29,7 +29,7 @@ use tracing::{error, info, instrument, warn};
 
 use crate::db::MongoDB;
 
-use self::clone::PutObjectInputMultiplier;
+use self::clone::{PutObjectInputMultiplier, UploadPartInputMultiplier};
 use self::remote::S3Remote;
 
 pub struct S3Reproxy {
@@ -105,47 +105,105 @@ impl S3 for S3Reproxy {
         Ok(S3Response::new(output))
     }
 
+    #[instrument(skip_all, name = "s3s/upload_part")]
+    async fn upload_part(
+        &self,
+        req: S3Request<UploadPartInput>,
+    ) -> S3Result<S3Response<UploadPartOutput>> {
+        let (id, remotes) = self.initiate_multipart(req.input.upload_id.clone()).await?;
+
+        let input = UploadPartInput::try_into_aws(req.input)?;
+
+        let input_multiplier = UploadPartInputMultiplier::from_input(input);
+        let remotes = futures::stream::iter(remotes.into_iter())
+            .map(|(remote, id)| {
+                let remote = match remote {
+                    Some(remote) => {
+                        let input = input_multiplier.input();
+                        (Some((remote, input)), id)
+                    }
+                    None => (None, id),
+                };
+                async move {
+                    match remote {
+                        (Some((remote, input)), id) => {
+                            let mut input = input.await.unwrap();
+                            input.upload_id = Some(id.upload_id.clone());
+                            (Some((remote, input)), id)
+                        }
+                        (None, id) => (None, id),
+                    }
+                }
+            })
+            .boxed()
+            .buffer_unordered(8)
+            .collect::<Vec<_>>()
+            .await;
+
+        let (ids, results) = futures::stream::iter(remotes.into_iter())
+            .map(|(remote, upload)| async move {
+                if let Some((remote, input)) = remote {
+                    let Some(result) = (try {
+                        let (tx, rx) = oneshot::channel();
+                        remote
+                            .tx
+                            .send(remote::RemoteMessage::UploadPart { input, reply: tx })
+                            .await
+                            .ok()?;
+                        rx.await.ok()??
+                    }) else {
+                        warn!("remote({:?}) request failed. cancelling", remote.name);
+                        return (upload.cancelled(), None);
+                    };
+                    (upload, Some((remote.name.clone(), result)))
+                } else {
+                    info!(
+                        "remote({:?}) has already been cancelled by another s3-reproxy replica",
+                        upload.remote_name
+                    );
+                    (upload, None)
+                }
+            })
+            .boxed()
+            .buffer_unordered(8)
+            .collect::<(Vec<_>, Vec<_>)>()
+            .await;
+
+        let results = results.into_iter().flatten().collect::<Vec<_>>();
+
+        let output = output_remote_inconsistent(results)?;
+
+        self.db
+            .multipart_upload_ids
+            .update_one(
+                doc! { "_id": id },
+                doc! {
+                    "$set": {
+                        "upload_ids": mongodb::bson::to_bson(&ids).unwrap(),
+                    },
+                },
+            )
+            .await
+            .map_err(|e| {
+                error!("mongodb error: {:?}", e);
+                S3Error::new(S3ErrorCode::InternalError)
+            })?;
+
+        info!("ok (upload_id: {})", id);
+
+        Ok(S3Response::new(UploadPartOutput::try_from_aws(output)?))
+    }
+
     #[instrument(skip_all, name = "s3s/complete_multipart_upload")]
     async fn complete_multipart_upload(
         &self,
         req: S3Request<CompleteMultipartUploadInput>,
     ) -> S3Result<S3Response<CompleteMultipartUploadOutput>> {
-        let id = ObjectId::parse_str(req.input.upload_id.clone()).map_err(|e| {
-            warn!("(intercepted) invalid upload_id: {:?}", e);
-            S3Error::new(S3ErrorCode::InvalidToken)
-        })?;
-        let ids = self
-            .db
-            .multipart_upload_ids
-            .find_one(doc! {
-                "_id": id,
-                "completed_at": None::<mongodb::bson::DateTime>,
-                "aborted_at": None::<mongodb::bson::DateTime>,
-            })
-            .await
-            .map_err(|e| {
-                error!("mongodb error: {:?}", e);
-                S3Error::new(S3ErrorCode::InternalError)
-            })?
-            .ok_or_else(|| {
-                warn!("(intercepted) upload_id not found.");
-                S3Error::new(S3ErrorCode::InvalidToken)
-            })?;
-
-        let remotes = ids
-            .upload_ids
-            .into_iter()
-            .map(|upload| match upload.status {
-                PartUploadStatus::Open => (
-                    self.remotes.iter().find(|r| r.name == upload.remote_name),
-                    upload,
-                ),
-                PartUploadStatus::Cancelled => (None, upload),
-            });
+        let (id, remotes) = self.initiate_multipart(req.input.upload_id.clone()).await?;
 
         let input = CompleteMultipartUploadInput::try_into_aws(req.input)?;
 
-        let results = futures::stream::iter(remotes)
+        let results = futures::stream::iter(remotes.into_iter())
             .map(|(remote, upload)| {
                 let value = input.clone();
                 async move {
@@ -202,6 +260,7 @@ impl S3 for S3Reproxy {
                 })),
             )
         } else {
+            warn!("no remotes are remains without rejection in multipart upload.");
             (
                 doc! {
                     "$set": {
@@ -220,6 +279,8 @@ impl S3 for S3Reproxy {
                 error!("mongodb error: {:?}", e);
                 S3Error::new(S3ErrorCode::InternalError)
             })?;
+
+        info!("ok (upload_id: {})", id);
 
         result
     }
@@ -289,6 +350,8 @@ impl S3 for S3Reproxy {
             .as_object_id()
             .unwrap()
             .to_hex();
+
+        info!("ok (upload_id: {})", id);
 
         Ok(S3Response::new(CreateMultipartUploadOutput {
             bucket: input.bucket,
@@ -661,5 +724,48 @@ fn output_remote_inconsistent<T, E: Debug + ProvideErrorMetadata>(
         let (remote, reply) = successes.into_iter().next().unwrap();
         info!("some remote ok (replied remote: {})", remote);
         Ok(reply)
+    }
+}
+
+impl S3Reproxy {
+    async fn initiate_multipart(
+        &self,
+        upload_id: String,
+    ) -> Result<(ObjectId, Vec<(Option<&S3Remote>, RemoteMultipartUploadId)>), S3Error> {
+        let id = ObjectId::parse_str(upload_id).map_err(|e| {
+            warn!("(intercepted) invalid upload_id: {:?}", e);
+            S3Error::new(S3ErrorCode::InvalidToken)
+        })?;
+        let ids = self
+            .db
+            .multipart_upload_ids
+            .find_one(doc! {
+                "_id": id,
+                "completed_at": None::<mongodb::bson::DateTime>,
+                "aborted_at": None::<mongodb::bson::DateTime>,
+            })
+            .await
+            .map_err(|e| {
+                error!("mongodb error: {:?}", e);
+                S3Error::new(S3ErrorCode::InternalError)
+            })?
+            .ok_or_else(|| {
+                warn!("(intercepted) upload_id not found.");
+                S3Error::new(S3ErrorCode::InvalidToken)
+            })?;
+
+        let remotes = ids
+            .upload_ids
+            .into_iter()
+            .map(|upload| match upload.status {
+                PartUploadStatus::Open => (
+                    self.remotes.iter().find(|r| r.name == upload.remote_name),
+                    upload,
+                ),
+                PartUploadStatus::Cancelled => (None, upload),
+            })
+            .collect_vec();
+
+        Ok((id, remotes))
     }
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use aws_sdk_s3::operation::put_object::builders::PutObjectInputBuilder;
 use aws_sdk_s3::operation::put_object::PutObjectInput;
+use aws_sdk_s3::operation::upload_part::UploadPartInput;
 use aws_sdk_s3::types::{
     ChecksumAlgorithm, ObjectCannedAcl, ObjectLockLegalHoldStatus, ObjectLockMode, RequestPayer,
     ServerSideEncryption, StorageClass,
@@ -10,9 +11,29 @@ use aws_smithy_types::DateTime;
 
 use super::stream::ByteStreamMultiplier;
 
-pub struct PutObjectInputMultiplier {
-    acl: Option<ObjectCannedAcl>,
+pub struct UploadPartInputMultiplier {
     body: ByteStreamMultiplier,
+    bucket: Option<String>,
+    content_length: Option<i64>,
+    content_md5: Option<String>,
+    checksum_algorithm: Option<ChecksumAlgorithm>,
+    checksum_crc32: Option<String>,
+    checksum_crc32_c: Option<String>,
+    checksum_sha1: Option<String>,
+    checksum_sha256: Option<String>,
+    key: Option<String>,
+    part_number: Option<i32>,
+    upload_id: Option<String>,
+    sse_customer_algorithm: Option<String>,
+    sse_customer_key: Option<String>,
+    sse_customer_key_md5: Option<String>,
+    request_payer: Option<RequestPayer>,
+    expected_bucket_owner: Option<String>,
+}
+
+pub struct PutObjectInputMultiplier {
+    body: ByteStreamMultiplier,
+    acl: Option<ObjectCannedAcl>,
     bucket: Option<String>,
     cache_control: Option<String>,
     content_disposition: Option<String>,
@@ -48,6 +69,62 @@ pub struct PutObjectInputMultiplier {
     object_lock_retain_until_date: Option<DateTime>,
     object_lock_legal_hold_status: Option<ObjectLockLegalHoldStatus>,
     expected_bucket_owner: Option<String>,
+}
+
+impl UploadPartInputMultiplier {
+    pub fn from_input(input: UploadPartInput) -> Self {
+        let body = ByteStreamMultiplier::from_bytestream(input.body);
+        Self {
+            body,
+            bucket: input.bucket,
+            content_length: input.content_length,
+            content_md5: input.content_md5,
+            checksum_algorithm: input.checksum_algorithm,
+            checksum_crc32: input.checksum_crc32,
+            checksum_crc32_c: input.checksum_crc32_c,
+            checksum_sha1: input.checksum_sha1,
+            checksum_sha256: input.checksum_sha256,
+            key: input.key,
+            part_number: input.part_number,
+            upload_id: input.upload_id,
+            sse_customer_algorithm: input.sse_customer_algorithm,
+            sse_customer_key: input.sse_customer_key,
+            sse_customer_key_md5: input.sse_customer_key_md5,
+            request_payer: input.request_payer,
+            expected_bucket_owner: input.expected_bucket_owner,
+        }
+    }
+
+    pub async fn input(&self) -> Option<UploadPartInput> {
+        let body = self.body.subscribe_stream().await?;
+
+        Some(
+            UploadPartInput::builder()
+                .body(body)
+                .set_bucket(self.bucket.clone())
+                .set_content_length(self.content_length.clone())
+                .set_content_md5(self.content_md5.clone())
+                .set_checksum_algorithm(self.checksum_algorithm.clone())
+                .set_checksum_crc32(self.checksum_crc32.clone())
+                .set_checksum_crc32_c(self.checksum_crc32_c.clone())
+                .set_checksum_sha1(self.checksum_sha1.clone())
+                .set_checksum_sha256(self.checksum_sha256.clone())
+                .set_key(self.key.clone())
+                .set_part_number(self.part_number.clone())
+                .set_upload_id(self.upload_id.clone())
+                .set_sse_customer_algorithm(self.sse_customer_algorithm.clone())
+                .set_sse_customer_key(self.sse_customer_key.clone())
+                .set_sse_customer_key_md5(self.sse_customer_key_md5.clone())
+                .set_request_payer(self.request_payer.clone())
+                .set_expected_bucket_owner(self.expected_bucket_owner.clone())
+                .build()
+                .unwrap(),
+        )
+    }
+
+    pub fn close(&mut self) {
+        self.body.close();
+    }
 }
 
 impl PutObjectInputMultiplier {
@@ -98,7 +175,7 @@ impl PutObjectInputMultiplier {
         let body = self.body.subscribe_stream().await?;
 
         Some(
-            PutObjectInputBuilder::default()
+            PutObjectInput::builder()
                 .set_acl(self.acl.clone())
                 .body(body)
                 .set_bucket(self.bucket.clone())
