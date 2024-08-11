@@ -91,7 +91,7 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
     let remotes = Arc::new(
         setup
             .config
-            .targets
+            .remotes
             .into_iter()
             .map(|t| spawn_remote(t, &mut remote_tasks))
             .collect(),
@@ -104,7 +104,7 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
     );
 
     let server = S3Reproxy {
-        bucket: setup.args.bucket,
+        bucket: setup.config.bucket,
         remotes: Arc::clone(&remotes),
         db,
     };
@@ -120,8 +120,8 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
     let s3_service = {
         let mut builder = S3ServiceBuilder::new(server);
         builder.set_auth(SimpleAuth::from_single(
-            setup.args.access_key,
-            setup.args.secret_key,
+            setup.config.access_key,
+            setup.config.secret_key,
         ));
         builder.build()
     };

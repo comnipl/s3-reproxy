@@ -26,16 +26,6 @@ pub(crate) struct AppArgs {
     #[clap(long, default_value = "9000", env = "PORT")]
     pub port: u16,
 
-    #[clap(long, env = "ACCESS_KEY")]
-    pub access_key: String,
-
-    #[clap(long, env = "SECRET_KEY", hide_env_values = true)]
-    #[derivative(Debug = "ignore")]
-    pub secret_key: String,
-
-    #[clap(long, env = "BUCKET")]
-    pub bucket: String,
-
     #[clap(long, env = "MONGO_URI", hide_env_values = true)]
     pub mongo_uri: String,
 
@@ -83,7 +73,7 @@ impl S3ReproxySetup {
     fn validate_config(setup: &Self) -> Result<(), SpanErr<Error>> {
         if setup
             .config
-            .targets
+            .remotes
             .iter()
             .filter(|t| t.read_request)
             .count()

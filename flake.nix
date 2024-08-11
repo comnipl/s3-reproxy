@@ -20,7 +20,7 @@
               darwin.apple_sdk.frameworks.Security
               minio-client
               python312Packages.boto3
-	      rustup
+              rustup
             ];
             shellHook = ''
               exec $SHELL

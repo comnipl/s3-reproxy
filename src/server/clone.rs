@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use aws_sdk_s3::operation::put_object::builders::PutObjectInputBuilder;
 use aws_sdk_s3::operation::put_object::PutObjectInput;
 use aws_sdk_s3::operation::upload_part::UploadPartInput;
 use aws_sdk_s3::types::{

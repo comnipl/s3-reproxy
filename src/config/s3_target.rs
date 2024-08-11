@@ -1,9 +1,14 @@
 use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Derivative, Clone, Serialize, Deserialize, PartialEq)]
+#[derivative(Debug)]
 pub struct Config {
-    pub targets: Vec<S3Target>,
+    pub remotes: Vec<S3Target>,
+    pub access_key: String,
+    #[derivative(Debug = "ignore")]
+    pub secret_key: String,
+    pub bucket: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Derivative)]
@@ -101,7 +106,7 @@ mod tests {
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(
-            config.targets,
+            config.remotes,
             vec![
                 S3Target {
                     name: "cloudflare-r2".to_string(),
