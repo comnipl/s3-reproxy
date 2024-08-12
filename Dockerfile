@@ -1,4 +1,4 @@
-FROM rust:slim-buster AS builder
+FROM rust:slim-bookworm AS builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y pkg-config libssl-dev
 COPY rust-toolchain.toml ./
@@ -7,7 +7,7 @@ COPY ./src ./src
 RUN cargo build --release
 
 
-FROM debian:buster-slim
+FROM debian:bookworm-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates
 COPY --from=builder /build/target/release/s3-reproxy .

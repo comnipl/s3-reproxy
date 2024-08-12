@@ -1,4 +1,4 @@
-use aws_sdk_s3::config::{Credentials, Region};
+use aws_sdk_s3::config::{Credentials, Region, StalledStreamProtectionConfig};
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::complete_multipart_upload::{
     CompleteMultipartUploadError, CompleteMultipartUploadInput, CompleteMultipartUploadOutput,
@@ -26,6 +26,7 @@ use tokio::task::JoinSet;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use crate::config::s3_target::S3Target;
+use crate::config::S3ReproxySetup;
 
 #[derive(Debug)]
 pub struct S3Remote {
@@ -134,7 +135,7 @@ pub enum RemoteMessage {
 
 // TODO: ここらへんのunwrap削減するぞ！
 #[instrument(name = "remote", skip_all, fields(name = target.name, bucket = target.s3.bucket))]
-pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
+pub fn spawn_remote(target: S3Target, setup: &S3ReproxySetup, set: &mut JoinSet<()>) -> S3Remote {
     let s3_config = aws_sdk_s3::config::Builder::new()
         .endpoint_url(target.s3.endpoint)
         .credentials_provider(Credentials::new(
@@ -144,6 +145,11 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
             None,
             "loaded-from-s3reproxy-config",
         ))
+        .stalled_stream_protection(
+            StalledStreamProtectionConfig::enabled()
+                .grace_period(*setup.args.stream_stall_grace_period)
+                .build(),
+        )
         .region(Region::new(""))
         .force_path_style(true)
         .behavior_version_latest()

@@ -1,5 +1,6 @@
 use clap::Parser;
 use derivative::Derivative;
+use duration_string::DurationString;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::fs;
@@ -31,6 +32,9 @@ pub(crate) struct AppArgs {
 
     #[clap(long, env = "MONGO_DB")]
     pub mongo_db: String,
+
+    #[clap(long, default_value = "5s")]
+    pub stream_stall_grace_period: DurationString,
 }
 
 #[derive(Debug)]

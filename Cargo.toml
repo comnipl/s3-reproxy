@@ -13,6 +13,7 @@ clap = { version = "4.5.9", features = ["derive", "env"] }
 color-spantrace = "0.2.1"
 derivative = "2.2.0"
 dotenvy = "0.15.7"
+duration-string = "0.4.0"
 futures = "0.3.30"
 http = "1.1.0"
 http-body = "1.0.1"

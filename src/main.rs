@@ -92,8 +92,8 @@ async fn s3_reproxy() -> Result<(), SpanErr<S3ProxyError>> {
         setup
             .config
             .remotes
-            .into_iter()
-            .map(|t| spawn_remote(t, &mut remote_tasks))
+            .iter()
+            .map(|t| spawn_remote(t.clone(), &setup, &mut remote_tasks))
             .collect(),
     );
 
