@@ -115,7 +115,7 @@ impl S3 for S3Reproxy {
 
         let input = UploadPartInput::try_into_aws(req.input)?;
 
-        let mut input_multiplier = UploadPartInputMultiplier::from_input(input);
+        let (mut input_multiplier, signal) = UploadPartInputMultiplier::from_input(input);
         let remotes = futures::stream::iter(remotes.into_iter())
             .map(|(remote, id)| {
                 let remote = match remote {
@@ -143,6 +143,7 @@ impl S3 for S3Reproxy {
 
         input_multiplier.close();
         info!("multiplied (close)");
+        signal.await.unwrap();
 
         let (ids, results) = futures::stream::iter(remotes.into_iter())
             .map(|(remote, upload)| async move {
@@ -371,7 +372,7 @@ impl S3 for S3Reproxy {
         req: S3Request<PutObjectInput>,
     ) -> S3Result<S3Response<PutObjectOutput>> {
         let input = PutObjectInput::try_into_aws(req.input)?;
-        let mut input_multiplier = PutObjectInputMultiplier::from_input(input);
+        let (mut input_multiplier, signal) = PutObjectInputMultiplier::from_input(input);
         let remotes = futures::stream::iter(self.remotes.iter())
             .map(|remote| {
                 let input = input_multiplier.input();
@@ -382,6 +383,7 @@ impl S3 for S3Reproxy {
             .collect::<Vec<_>>()
             .await;
         input_multiplier.close();
+        signal.await.unwrap();
         let results = futures::stream::iter(remotes.into_iter())
             .map(|(remote, input)| async move {
                 let Some(result) = (try {

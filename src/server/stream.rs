@@ -17,8 +17,12 @@ pub(crate) struct ByteStreamMultiplier {
     size_hint_rx: watch::Receiver<http_body::SizeHint>,
 }
 
+pub type FirstByteSignal = oneshot::Receiver<()>;
+
 impl ByteStreamMultiplier {
-    pub fn from_bytestream(mut stream: ByteStream) -> Self {
+    pub fn from_bytestream(mut stream: ByteStream) -> (Self, FirstByteSignal) {
+        let (first_byte_tx, first_byte_rx) = oneshot::channel();
+
         let (listen_tx, mut listen_rx) = mpsc::channel(4);
 
         let (subscribe_tx, mut subscribe_rx) =
@@ -30,7 +34,16 @@ impl ByteStreamMultiplier {
                 size_hint_tx
                     .send(convert_sizehint(stream.size_hint()))
                     .unwrap();
+                let mut first_byte_tx = Some(first_byte_tx);
+                let spawned_at = tokio::time::Instant::now();
                 while let Some(data) = stream.next().await {
+                    if let Some(tx) = first_byte_tx.take() {
+                        info!(
+                            "first byte received ({}ms)",
+                            spawned_at.elapsed().as_millis()
+                        );
+                        tx.send(()).unwrap();
+                    }
                     let payload = data.map_err(|e| ByteStreamError::ByteStreamError(e.to_string()));
                     listen_tx.send(Some(payload)).await.unwrap();
                     size_hint_tx
@@ -91,10 +104,13 @@ impl ByteStreamMultiplier {
             .instrument(info_span!("stream_broadcaster")),
         );
 
-        Self {
-            subscribe_tx: Some(subscribe_tx),
-            size_hint_rx,
-        }
+        (
+            Self {
+                subscribe_tx: Some(subscribe_tx),
+                size_hint_rx,
+            },
+            first_byte_rx,
+        )
     }
 
     pub async fn subscribe_stream(&self) -> Option<ByteStream> {

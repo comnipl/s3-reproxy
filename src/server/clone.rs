@@ -8,7 +8,7 @@ use aws_sdk_s3::types::{
 };
 use aws_smithy_types::DateTime;
 
-use super::stream::ByteStreamMultiplier;
+use super::stream::{ByteStreamMultiplier, FirstByteSignal};
 
 pub struct UploadPartInputMultiplier {
     body: ByteStreamMultiplier,
@@ -71,9 +71,9 @@ pub struct PutObjectInputMultiplier {
 }
 
 impl UploadPartInputMultiplier {
-    pub fn from_input(input: UploadPartInput) -> Self {
-        let body = ByteStreamMultiplier::from_bytestream(input.body);
-        Self {
+    pub fn from_input(input: UploadPartInput) -> (Self, FirstByteSignal) {
+        let (body, signal) = ByteStreamMultiplier::from_bytestream(input.body);
+        let multiplier = Self {
             body,
             bucket: input.bucket,
             content_length: input.content_length,
@@ -91,7 +91,8 @@ impl UploadPartInputMultiplier {
             sse_customer_key_md5: input.sse_customer_key_md5,
             request_payer: input.request_payer,
             expected_bucket_owner: input.expected_bucket_owner,
-        }
+        };
+        (multiplier, signal)
     }
 
     pub async fn input(&self) -> Option<UploadPartInput> {
@@ -127,9 +128,9 @@ impl UploadPartInputMultiplier {
 }
 
 impl PutObjectInputMultiplier {
-    pub fn from_input(input: PutObjectInput) -> Self {
-        let body = ByteStreamMultiplier::from_bytestream(input.body);
-        Self {
+    pub fn from_input(input: PutObjectInput) -> (Self, FirstByteSignal) {
+        let (body, signal) = ByteStreamMultiplier::from_bytestream(input.body);
+        let multiplier = Self {
             body,
             acl: input.acl,
             bucket: input.bucket,
@@ -167,7 +168,8 @@ impl PutObjectInputMultiplier {
             object_lock_retain_until_date: input.object_lock_retain_until_date,
             object_lock_legal_hold_status: input.object_lock_legal_hold_status,
             expected_bucket_owner: input.expected_bucket_owner,
-        }
+        };
+        (multiplier, signal)
     }
 
     pub async fn input(&self) -> Option<PutObjectInput> {
