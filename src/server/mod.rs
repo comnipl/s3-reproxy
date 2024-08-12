@@ -105,16 +105,17 @@ impl S3 for S3Reproxy {
         Ok(S3Response::new(output))
     }
 
-    #[instrument(skip_all, name = "s3s/upload_part")]
+    #[instrument(skip_all, name = "s3s/upload_part", fields(part_number = &req.input.part_number))]
     async fn upload_part(
         &self,
         req: S3Request<UploadPartInput>,
     ) -> S3Result<S3Response<UploadPartOutput>> {
+        info!("multipling...");
         let (id, remotes) = self.initiate_multipart(req.input.upload_id.clone()).await?;
 
         let input = UploadPartInput::try_into_aws(req.input)?;
 
-        let input_multiplier = UploadPartInputMultiplier::from_input(input);
+        let mut input_multiplier = UploadPartInputMultiplier::from_input(input);
         let remotes = futures::stream::iter(remotes.into_iter())
             .map(|(remote, id)| {
                 let remote = match remote {
@@ -139,6 +140,9 @@ impl S3 for S3Reproxy {
             .buffer_unordered(8)
             .collect::<Vec<_>>()
             .await;
+
+        input_multiplier.close();
+        info!("multiplied (close)");
 
         let (ids, results) = futures::stream::iter(remotes.into_iter())
             .map(|(remote, upload)| async move {
@@ -367,7 +371,7 @@ impl S3 for S3Reproxy {
         req: S3Request<PutObjectInput>,
     ) -> S3Result<S3Response<PutObjectOutput>> {
         let input = PutObjectInput::try_into_aws(req.input)?;
-        let input_multiplier = PutObjectInputMultiplier::from_input(input);
+        let mut input_multiplier = PutObjectInputMultiplier::from_input(input);
         let remotes = futures::stream::iter(self.remotes.iter())
             .map(|remote| {
                 let input = input_multiplier.input();
@@ -377,6 +381,7 @@ impl S3 for S3Reproxy {
             .buffer_unordered(8)
             .collect::<Vec<_>>()
             .await;
+        input_multiplier.close();
         let results = futures::stream::iter(remotes.into_iter())
             .map(|(remote, input)| async move {
                 let Some(result) = (try {

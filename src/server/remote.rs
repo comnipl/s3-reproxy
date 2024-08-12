@@ -23,7 +23,7 @@ use aws_smithy_runtime_api::client::result::ServiceError;
 use std::fmt::Debug;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
-use tracing::{info, instrument, warn, Instrument};
+use tracing::{info, info_span, instrument, warn, Instrument};
 
 use crate::config::s3_target::S3Target;
 
@@ -359,6 +359,8 @@ pub fn spawn_remote(target: S3Target, set: &mut JoinSet<()>) -> S3Remote {
                             let _ = reply.send(map_health(&mut health, q));
                         }
                         RemoteMessage::UploadPart { input, reply } => {
+                            let span = info_span!("upload_part_message", part_number = &input.part_number);
+                            let _guard = span.enter();
                             info!("Upload part...");
 
                             let q = client.upload_part()
