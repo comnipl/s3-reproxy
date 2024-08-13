@@ -4,7 +4,7 @@ use http_body::{Body, SizeHint};
 use pin_project::pin_project;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{error, info, info_span, instrument, Instrument};
+use tracing::{error, info, info_span, instrument, warn, Instrument};
 
 // TODO: unwrap 多すぎ……
 
@@ -79,8 +79,9 @@ impl ByteStreamMultiplier {
                         listened = listen_rx.recv() => {
                             match listened {
                                 Some(payload) => {
-                                    if listen_rx.is_closed() {
+                                    if subscribe_rx.is_closed() && will_be_new_tx {
                                         will_be_new_tx = false;
+                                        info!("subscribe_rx is closed");
                                     }
 
                                     for tx in txs.iter_mut() {
@@ -113,7 +114,7 @@ impl ByteStreamMultiplier {
         )
     }
 
-    pub async fn subscribe_stream(&self) -> Option<ByteStream> {
+    pub async fn subscribe_stream(&self, part_number: Option<i32>) -> Option<ByteStream> {
         let subscribe_tx = self.subscribe_tx.clone()?;
         let (tx, rx) = oneshot::channel();
         subscribe_tx.send(tx).await.unwrap();
@@ -121,6 +122,7 @@ impl ByteStreamMultiplier {
             frame_rx: rx.await.unwrap(),
             size_hint_rx: self.size_hint_rx.clone(),
             is_end_stream_reached: false,
+            part_number,
         };
         Some(ByteStream::from_body_1_x(receiver))
     }
@@ -152,19 +154,21 @@ struct ByteStreamReceiver {
     frame_rx: mpsc::Receiver<ByteStreamResult>,
     size_hint_rx: watch::Receiver<http_body::SizeHint>,
     is_end_stream_reached: bool,
+    part_number: Option<i32>,
 }
 
 impl Body for ByteStreamReceiver {
     type Data = Bytes;
     type Error = ByteStreamError;
 
-    #[instrument(skip_all, name = "byte_stream_receiver/poll")]
+    #[instrument(skip_all, name = "byte_stream_receiver/poll", fields(part_number = self.part_number))]
     #[allow(clippy::type_complexity)]
     fn poll_frame(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
         let project = self.project();
+
         project.frame_rx.poll_recv(cx).map(|r| match r {
             Some(Some(frame)) => Some(frame.map(http_body::Frame::data)),
             Some(None) => {

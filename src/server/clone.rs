@@ -96,7 +96,7 @@ impl UploadPartInputMultiplier {
     }
 
     pub async fn input(&self) -> Option<UploadPartInput> {
-        let body = self.body.subscribe_stream().await?;
+        let body = self.body.subscribe_stream(self.part_number).await?;
 
         Some(
             UploadPartInput::builder()
@@ -173,7 +173,7 @@ impl PutObjectInputMultiplier {
     }
 
     pub async fn input(&self) -> Option<PutObjectInput> {
-        let body = self.body.subscribe_stream().await?;
+        let body = self.body.subscribe_stream(None).await?;
 
         Some(
             PutObjectInput::builder()
