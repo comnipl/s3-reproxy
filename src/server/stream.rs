@@ -76,26 +76,22 @@ impl ByteStreamMultiplier {
                             }
                             txs.push(tx);
                         }
-                        listened = listen_rx.recv() => {
-                            match listened {
-                                Some(payload) => {
-                                    if subscribe_rx.is_closed() && will_be_new_tx {
-                                        will_be_new_tx = false;
-                                        info!("subscribe_rx is closed");
-                                    }
-
-                                    for tx in txs.iter_mut() {
-                                        tx.send(payload.clone()).await.unwrap();
-                                    }
-
-                                    if will_be_new_tx {
-                                        read_cache.push(payload);
-                                    }
-                                }
-                                None => {
-                                    break;
-                                }
+                        Some(payload) = listen_rx.recv() => {
+                            if subscribe_rx.is_closed() && will_be_new_tx {
+                                will_be_new_tx = false;
+                                info!("subscribe_rx is closed");
                             }
+
+                            for tx in txs.iter_mut() {
+                                tx.send(payload.clone()).await.unwrap();
+                            }
+
+                            if will_be_new_tx {
+                                read_cache.push(payload);
+                            }
+                        }
+                        else => {
+                            break;
                         }
                     }
                 }
